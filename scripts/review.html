@@ -56,11 +56,11 @@
     <div class="card">
       <h2>1. 经费项目 <span class="req">*</span></h2>
       <input type="text" id="project" placeholder="填项目编号，或项目名称关键字，如 12345678" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #d0d5dd;border-radius:8px;font-size:15px">
-      <div class="hint">只列余额不为 0 且你是负责人的项目。选错了不提交就没有影响。</div>
+      <div class="hint">填项目编号或项目名称里的关键字即可（如 12345678）。脚本会到系统里按“包含”匹配，匹配不到会停下来问你，不会乱填。</div>
     </div>
 
     <div class="card">
-      <h2>2. 出差事由 <span class="req">*</span></h2>
+      <h2>2. 报销事由 / 出差事由 <span class="req">*</span></h2>
       <textarea id="reason" rows="3" placeholder="赴××单位开展××工作（须写明对方单位）"></textarea>
       <div class="hint">系统红字要求"须明确对方单位"。这句话会进审批流，审批人看的就是它。</div>
     </div>
@@ -77,7 +77,7 @@
     </div>
 
     <div class="card">
-      <h2>4. 住宿那晚怎么处理</h2>
+      <h2>4. 住宿那晚怎么处理 <span style="font-size:12px;color:#888">（差旅专用，无纸化报销可忽略）</span></h2>
       <label class="opt"><input type="radio" name="hotel" value="none" checked>
         <span><span class="t">不报，填 0</span><br><span class="d">对方安排 / 本来就不该报</span></span></label>
       <label class="opt"><input type="radio" name="hotel" value="baogan">
@@ -87,7 +87,7 @@
     </div>
 
     <div class="card">
-      <h2>5. 四张网约车票记在哪一类</h2>
+      <h2>5. 网约车票记在哪一类 <span style="font-size:12px;color:#888">（差旅专用，无纸化报销可忽略）</span></h2>
       <label class="opt"><input type="radio" name="car" value="qiche" checked>
         <span><span class="t">交通费 →「汽车」</span><br><span class="d">推荐：只有这一行能挂发票（"市内交通补助"行没有选票按钮）</span></span></label>
       <label class="opt"><input type="radio" name="car" value="qita">

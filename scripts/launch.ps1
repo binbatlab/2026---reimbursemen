@@ -79,7 +79,9 @@ if ($CheckOnly) {
 if (-not $Script) { Write-Output "缺少 -Script 参数"; exit 1 }
 
 # powershell -File 传数组时会退化成 "a,b" 单个字符串，这里还原
-if ($ScriptArgs.Count -eq 1 -and $ScriptArgs[0] -is [string] -and $ScriptArgs[0].Contains(",")) {
+if ($ScriptArgs.Count -eq 1 -and $ScriptArgs[0] -is [string] -and $ScriptArgs[0].Contains(",") -and
+    $ScriptArgs[0] -notmatch "[:\\/`"]") {
+  # 只在明显是 "a,b,c" 这种参数列表时才拆分；带盘符/路径分隔符的原样保留
   $ScriptArgs = $ScriptArgs[0] -split ","
 }
 
