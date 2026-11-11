@@ -1,0 +1,19 @@
+# 运行时：内置便携 Python + pypdf（约 22 MB 二进制，不纳入版本库）
+runtime/
+
+# 本机凭据与用户数据（绝不能提交）
+.ywtb.cred
+.browser-profile/
+.browser-profile-edge/
+invoices/
+finance_recon/
+node_modules/
+
+# 系统 / 编辑器
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Python 编译缓存
+__pycache__/
+*.pyc

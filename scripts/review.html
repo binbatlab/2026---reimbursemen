@@ -1,0 +1,170 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>差旅报销 · 待确认信息</title>
+<style>
+  :root { --line:#e5e7eb; --ink:#111827; --sub:#6b7280; --brand:#2563eb; --ok:#059669; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; color:var(--ink); background:#f3f4f6; }
+  .wrap { max-width: 760px; margin: 24px auto 60px; padding: 0 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--sub); font-size: 13px; margin-bottom: 20px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  .card h2 { font-size: 15px; margin:0 0 14px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+  table { width:100%; border-collapse: collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid #f3f4f6; }
+  th { color:var(--sub); font-weight:500; }
+  .total { font-weight:600; color:var(--brand); }
+  label.opt { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1px solid var(--line);
+             border-radius:10px; margin-bottom:8px; cursor:pointer; }
+  label.opt:hover { background:#f9fafb; }
+  label.opt input { margin-top:4px; }
+  .opt .t { font-weight:500; }
+  .opt .d { color:var(--sub); font-size:12.5px; }
+  textarea, input[type=text] { width:100%; padding:10px 12px; border:1px solid var(--line);
+             border-radius:10px; font:inherit; resize:vertical; }
+  textarea:focus, input[type=text]:focus { outline:2px solid #bfdbfe; border-color:var(--brand); }
+  .req { color:#dc2626; }
+  .hint { color:var(--sub); font-size:12.5px; margin-top:6px; }
+  .note { background:#f9fafb; border-left:3px solid var(--brand); padding:10px 12px; border-radius:6px; font-size:13.5px; }
+  button { background:var(--brand); color:#fff; border:0; border-radius:10px; padding:12px 22px;
+           font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .done { display:none; text-align:center; padding:40px 0; }
+  .done .big { font-size:44px; }
+  .err { color:#dc2626; font-size:13px; margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>差旅报销 · 待确认信息</h1>
+  <div class="sub">2026-01-01 ~ 01-02 · 示例出发地 ⇄ 示例到达地 · 示例姓名</div>
+
+  <form id="f">
+    <div class="card">
+      <h2>我已从 6 张发票中读出的数据</h2>
+      <table>
+        <tr><th>类型</th><th>金额</th><th>说明</th></tr>
+        <tr><td>机票 ×2</td><td>¥1,000.00</td><td>01-01 示例城市A→示例城市B XX1234；01-02 示例城市B→示例城市A XX1235</td></tr>
+        <tr><td>网约车 ×4</td><td>¥400.00</td><td>机场往返接送（示例数据）</td></tr>
+        <tr><td class="total">合计</td><td class="total">¥1,400.00</td><td>票号唯一、金额勾稽全部通过</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>1. 经费项目 <span class="req">*</span></h2>
+      <input type="text" id="project" placeholder="填项目编号，或项目名称关键字，如 12345678" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #d0d5dd;border-radius:8px;font-size:15px">
+      <div class="hint">只列余额不为 0 且你是负责人的项目。选错了不提交就没有影响。</div>
+    </div>
+
+    <div class="card">
+      <h2>2. 出差事由 <span class="req">*</span></h2>
+      <textarea id="reason" rows="3" placeholder="赴××单位开展××工作（须写明对方单位）"></textarea>
+      <div class="hint">系统红字要求"须明确对方单位"。这句话会进审批流，审批人看的就是它。</div>
+    </div>
+
+    <div class="card">
+      <h2>3. 职称职别 <span class="req">*</span></h2>
+      <input type="text" id="title" list="titles" placeholder="教授 / 副教授 / 讲师 / 研究员 / 副研究员 …" />
+      <datalist id="titles">
+        <option value="教授"></option><option value="副教授"></option><option value="讲师"></option>
+        <option value="研究员"></option><option value="副研究员"></option><option value="助理研究员"></option>
+        <option value="工程师"></option><option value="高级工程师"></option>
+      </datalist>
+      <div class="hint">系统必填项，为空会导致「下一步」被拦截（提示"请您填写职别信息"）。影响报销标准，所以由你自己填。</div>
+    </div>
+
+    <div class="card">
+      <h2>4. 住宿那晚怎么处理</h2>
+      <label class="opt"><input type="radio" name="hotel" value="none" checked>
+        <span><span class="t">不报，填 0</span><br><span class="d">对方安排 / 本来就不该报</span></span></label>
+      <label class="opt"><input type="radio" name="hotel" value="baogan">
+        <span><span class="t">选「包干」</span><br><span class="d">自己付的、没发票，按标准拿固定金额</span></span></label>
+      <label class="opt"><input type="radio" name="hotel" value="invoice">
+        <span><span class="t">有住宿发票，走实报</span><br><span class="d">选这个的话，稍后把发票发我，我重算</span></span></label>
+    </div>
+
+    <div class="card">
+      <h2>5. 四张网约车票记在哪一类</h2>
+      <label class="opt"><input type="radio" name="car" value="qiche" checked>
+        <span><span class="t">交通费 →「汽车」</span><br><span class="d">推荐：只有这一行能挂发票（"市内交通补助"行没有选票按钮）</span></span></label>
+      <label class="opt"><input type="radio" name="car" value="qita">
+        <span><span class="t">费用明细 →「其他费用」</span><br><span class="d">如果你们财务习惯把机场接送放这里</span></span></label>
+    </div>
+
+    <div class="card">
+      <h2>6. 我准备填的备注（可改）</h2>
+      <textarea id="remark" rows="3">示例：目的地无民用机场，本次出差目的地为××，往返经××中转：×月×日乘 XX1234 自××至××，转乘车至××；×月×日自××乘车返××，乘 XX1235 返××。特此说明。</textarea>
+      <div class="hint">这段解释"为什么落到非目的地城市"，审批人最容易卡的地方。</div>
+    </div>
+
+    <div class="card">
+      <h2>7. 支付方式</h2>
+      <label class="opt"><input type="radio" name="pay" value="private_self" checked>
+        <span><span class="t">对私支付 · 本人</span><br><span class="d">钱打到你自己的工资卡（自己先垫付的情况）</span></span></label>
+      <label class="opt"><input type="radio" name="pay" value="corporate">
+        <span><span class="t">对公转账</span><br><span class="d">打给开票单位，需要对方开户信息</span></span></label>
+      <label class="opt"><input type="radio" name="pay" value="offset">
+        <span><span class="t">冲借款</span><br><span class="d">之前为这笔业务借过款</span></span></label>
+      <label class="opt"><input type="radio" name="pay" value="paid">
+        <span><span class="t">已支付建账</span><br><span class="d">学校账户已经付过</span></span></label>
+    </div>
+
+    <div class="card">
+      <h2>8. 审批人 / 担保人</h2>
+      <div class="hint">无纸化报销的审批流程至少要有一个担保人。填工号即可，姓名留空系统会自动带出。</div>
+      <table>
+        <tr><th>角色</th><th>工号</th><th>姓名（可空）</th></tr>
+        <tr><td>担保人</td><td><input id="ap_no1" placeholder="工号"></td><td><input id="ap_name1" placeholder="姓名"></td></tr>
+        <tr><td>担保人</td><td><input id="ap_no2" placeholder="可空"></td><td><input id="ap_name2" placeholder=""></td></tr>
+      </table>
+    </div>
+    <button type="submit" id="go">确认，继续填单</button>
+    <div class="err" id="err"></div>
+  </form>
+
+  <div class="done" id="done">
+    <div class="big">✅</div>
+    <p><strong>已提交</strong></p>
+    <p class="sub">回到对话窗口，告诉我一声"填好了"，我继续。</p>
+  </div>
+</div>
+
+<script>
+const f = document.getElementById('f');
+f.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const err = document.getElementById('err');
+  const reason = document.getElementById('reason').value.trim();
+  if (!document.getElementById('project').value.trim()) { err.textContent = '经费项目不能为空'; document.getElementById('project').focus(); return; }
+  if (!reason) { err.textContent = '出差事由不能为空'; document.getElementById('reason').focus(); return; }
+  const title = document.getElementById('title').value.trim();
+  if (!title) { err.textContent = '职称职别不能为空'; document.getElementById('title').focus(); return; }
+  const data = {
+    project: (document.getElementById('project').value || '').trim(),
+    reason,
+    title,
+    hotel: f.querySelector('input[name=hotel]:checked').value,
+    car: f.querySelector('input[name=car]:checked').value,
+    remark: document.getElementById('remark').value.trim(),
+    payMethod: f.querySelector('input[name=pay]:checked').value,
+    approvers: [['ap_no1','ap_name1'],['ap_no2','ap_name2']].map(([a,b])=>({ role:'担保人', no:(document.getElementById(a).value||'').trim(), name:(document.getElementById(b).value||'').trim() })).filter(x=>x.no),
+  };
+  const btn = document.getElementById('go');
+  btn.disabled = true; btn.textContent = '提交中…';
+  try {
+    const r = await fetch('/submit', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(data) });
+    if (!r.ok) throw new Error('服务器返回 ' + r.status);
+    f.style.display = 'none';
+    document.getElementById('done').style.display = 'block';
+    window.scrollTo(0, 0);
+  } catch (ex) {
+    btn.disabled = false; btn.textContent = '确认，继续填单';
+    err.textContent = '提交失败：' + ex.message;
+  }
+});
+</script>
+</body>
+</html>
