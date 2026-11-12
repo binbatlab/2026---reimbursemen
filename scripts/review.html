@@ -146,9 +146,11 @@
   </form>
 
   <div class="done" id="done">
-    <div class="big">✅</div>
-    <p><strong>已提交</strong></p>
-    <p class="sub">回到对话窗口，告诉我一声"填好了"，我继续。</p>
+    <div class="big">🚀</div>
+    <p><strong>已确认，正在自动填报…</strong></p>
+    <p class="sub">不用回对话窗口，进度在下面实时显示。到「支付方式」页会停下，最后提交由你自己点。</p>
+    <pre id="autofillLog" style="text-align:left;background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;max-height:340px;overflow:auto;font-size:12.5px;line-height:1.6;white-space:pre-wrap"></pre>
+    <p class="sub" id="autofillState"></p>
   </div>
 </div>
 
@@ -203,11 +205,36 @@ f.addEventListener('submit', async (e) => {
     f.style.display = 'none';
     document.getElementById('done').style.display = 'block';
     window.scrollTo(0, 0);
+    pollAutofill();          // 点确认后自动开始轮询填报进度，不用回对话窗口
   } catch (ex) {
     btn.disabled = false; btn.textContent = '确认，继续填单';
     err.textContent = '提交失败：' + ex.message;
   }
 });
+
+// 轮询后端填报进度
+async function pollAutofill() {
+  const log = document.getElementById('autofillLog');
+  const state = document.getElementById('autofillState');
+  let ticks = 0;
+  while (ticks++ < 300) {          // 最多 10 分钟
+    try {
+      const r = await fetch('/status');
+      const s = await r.json();
+      if (log) { log.textContent = (s.lines || []).join('\n'); log.scrollTop = log.scrollHeight; }
+      if (s.running) { if (state) state.textContent = '填报中…（约 2-4 分钟，别关这个页面）'; }
+      else {
+        if (state) {
+          state.textContent = s.code === 0
+            ? '✅ 已停在「支付方式」页：请到浏览器里核对金额，然后自己点提交。'
+            : `⚠️ 填报结束但返回码 ${s.code}，请看上面的日志，或回对话窗口告诉我。`;
+        }
+        break;
+      }
+    } catch (e) { if (state) state.textContent = '读取进度失败：' + e.message; }
+    await new Promise((res) => setTimeout(res, 2000));
+  }
+}
 </script>
 </body>
 </html>

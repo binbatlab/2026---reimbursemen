@@ -1,7 +1,7 @@
 ﻿// 把「我的项目」抓下来，写成 invoices/projects.json，供确认页做下拉选择。
 //   launch.ps1 -Script scripts\list_projects.mjs
 import { ensureBrowser, Browser, sleep } from "./cdp.mjs";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ROOT = process.env.YWTB_WORKDIR || resolve(import.meta.dirname, "..");
@@ -50,6 +50,12 @@ const ymd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0
 const usable = rows.filter((r) => Number(r.balance || 0) > 0 && (!r.expiry || r.expiry >= ymd));
 const dropped = rows.filter((r) => !usable.includes(r));
 
+if (!rows.length) {
+  const old = resolve(ROOT, "invoices", "projects.json");
+  console.log("!! 没抓到项目（可能未登录），保留上次的清单不动");
+  if (existsSync(old)) console.log("   现有清单条数:", JSON.parse(readFileSync(old, "utf8")).length);
+  process.exit(0);
+}
 mkdirSync(resolve(ROOT, "invoices"), { recursive: true });
 writeFileSync(resolve(ROOT, "invoices", "projects_all.json"), JSON.stringify(rows, null, 1), "utf8");
 writeFileSync(resolve(ROOT, "invoices", "projects.json"), JSON.stringify(usable, null, 1), "utf8");

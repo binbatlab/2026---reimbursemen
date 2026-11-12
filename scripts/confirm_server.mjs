@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawn } from "node:child_process";
 import { readConfig, saveConfig } from "./config.mjs";
 import { cityTransportPlan } from "./rules.mjs";
 
@@ -185,6 +186,35 @@ const render = () => {
     `<script id="prefill-data" type="application/json">${data}</script><script>${FILL_JS}</script></body>`);
 };
 
+// —— 点「确认」后自动接着填报（不用回对话窗口）——
+let autofill = { running: false, code: null, lines: [] };
+
+function startAutofill() {
+  if (autofill.running) return;
+  autofill = { running: true, code: null, lines: ["开始自动填报…"] };
+  const push = (s) => {
+    autofill.lines.push(...String(s).split(/\r?\n/).filter((x) => x.trim()));
+    if (autofill.lines.length > 500) autofill.lines.splice(0, autofill.lines.length - 500);
+  };
+  const override = process.env.YWTB_AUTOFILL_CMD;
+  const child = override
+    ? spawn(override, { shell: true, env: process.env, windowsHide: true })
+    : spawn(process.env.YWTB_POWERSHELL || "powershell", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-File", resolve(import.meta.dirname, "launch.ps1"),
+        "-Script", "scripts\\fill_travel.mjs",
+      ], { env: { ...process.env, YWTB_WORKDIR: ROOT }, windowsHide: true });
+
+  child.stdout?.on("data", push);
+  child.stderr?.on("data", push);
+  child.on("exit", (code) => {
+    autofill.running = false;
+    autofill.code = code;
+    push(code === 0 ? "✅ 填报完成：已停在支付方式页，请核对后自己点提交。" : `⚠️ 填报进程结束，返回码 ${code}`);
+  });
+  child.on("error", (e) => { autofill.running = false; autofill.code = -1; push("启动失败: " + e.message); });
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
 
@@ -205,7 +235,11 @@ const server = createServer((req, res) => {
         const ha = Number(data.hotelAmount) || 0;
         data.hotelDays = hd > 0 ? hd : 0;
         data.hotelAmount = ha > 0 ? Number(ha.toFixed(2)) : 0;
-        data.hotel = data.hotelAmount > 0 ? "invoice" : (data.hotelDays > 0 ? "baogan" : "none");
+        // 尊重前端选的包干/不包干；2 开头项目强制不包干
+        const forced = /^2/.test(String(data.project || "").trim());
+        data.hotelMode = forced ? "invoice" : (data.hotelMode || (data.hotelAmount > 0 ? "invoice" : "baogan"));
+        data.hotel = data.hotelDays > 0 ? data.hotelMode : "none";
+        data.hotelInvoices = data.hotelMode === "invoice" && data.hotelDays > 0 ? Number(data.hotelInvoices || 2) : 0;
         data.people = Math.max(1, Math.floor(Number(data.people) || 1));
         data._submittedAt = new Date().toISOString();
         mkdirSync(resolve(ROOT, "invoices"), { recursive: true });
@@ -221,12 +255,24 @@ const server = createServer((req, res) => {
         });
         console.log("收到确认:", JSON.stringify(data));
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify({ ok: true }));
+        res.end(JSON.stringify({ ok: true, autofill: true }));
+        // 回应写完再启动，避免阻塞
+        setTimeout(() => { try { startAutofill(); } catch (e) { console.error("自动填报启动失败:", e.message); } }, 300);
       } catch (e) {
         res.writeHead(400, { "content-type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ ok: false, error: String(e) }));
       }
     });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/status") {
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({
+      running: autofill.running,
+      code: autofill.code,
+      lines: autofill.lines.slice(-120),
+    }));
     return;
   }
 
