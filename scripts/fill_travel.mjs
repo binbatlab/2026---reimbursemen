@@ -457,9 +457,74 @@ if (!/ZFFS/i.test(after.url)) {
   process.exit(4);
 }
 say("进支付方式", true, after.url.slice(0, 70));
+
+// 12 支付方式：对私支付 → 本人 → 金额=差额 → 新增（差额归零）
+const payStep = await p.eval(inF(/ZFFS/i, `(() => {
+  const d = doc;
+  const txt = (d.body.innerText || "").replace(/\\s+/g, " ");
+  const m = txt.match(/差额[：:]\\s*¥?\\s*([\\d.]+)/);
+  const diff = m ? m[1] : "";
+  // 对私支付那一行
+  const rows = [...d.querySelectorAll("tr")];
+  const row = rows.find((tr) => /网银对私|对私支付/.test(tr.innerText || ""));
+  if (!row) return { ok: false, why: "没找到对私支付行", diff };
+  // 支付方式下拉：选“网银对私（校内）”
+  const sel = row.querySelector("select");
+  if (sel) {
+    const o = [...sel.options].find((x) => /网银对私/.test(x.text) && /校内/.test(x.text)) ||
+              [...sel.options].find((x) => /网银对私/.test(x.text));
+    if (o) { sel.value = o.value; sel.dispatchEvent(new Event("change", { bubbles: true })); }
+  }
+  // 人员：本人
+  const radio = [...row.querySelectorAll("input[type=radio]")].find((r) => /rad_wszf/.test(r.id) && /_0$/.test(r.id));
+  if (radio && !radio.checked) radio.click();
+  // 金额
+  const money = [...row.querySelectorAll("input[type=text]")].find((i) => /JE|Money|金额/i.test(i.id || "") || !i.id);
+  if (money && diff) { money.value = diff; money.dispatchEvent(new Event("input", { bubbles: true })); money.dispatchEvent(new Event("change", { bubbles: true })); }
+  // 新增
+  const add = [...row.querySelectorAll("input[type=image],input[type=button],a")].find((e) => /新增|add|Add/.test((e.value || e.title || e.alt || "")));
+  if (add) add.click();
+  return { ok: !!(sel && radio), diff, moneyId: money ? money.id : "", add: !!add };
+})()`)).catch((e) => ({ ok: false, why: e.message }));
+
+await sleep(6000);
+const diffAfter = await p.eval(inF(/ZFFS/i, `(() => {
+  const t = (doc.body.innerText || "").replace(/\\s+/g, " ");
+  const m = t.match(/差额[：:]\\s*¥?\\s*([\\d.]+)/);
+  return m ? m[1] : "";
+})()`)).catch(() => "");
+const payOk = payStep.ok && Number(diffAfter || 1) === 0;
+say("支付方式", payOk, `差额 ${payStep.diff || "?"} → ${diffAfter || "?"}${payStep.why ? "（" + payStep.why + "）" : ""}`);
+
+if (!payOk) {
+  console.log("\n=== 汇总 ===");
+  for (const [o, k, m] of log) console.log(`${o ? "✅" : "❌"} ${k}: ${m}`);
+  console.log("\n⚠️ 支付方式没自动填成（差额未归零），请在页面上手动：对私支付 → 本人 → 金额 → 新增。");
+  await p.bringToFront();
+  await p.banner(`⚠️ 支付方式需人工：差额 ${payStep.diff} → ${diffAfter}`, { color: "#dc2626", pulse: false });
+  process.exit(5);
+}
+
+// 13 提交线上审批 → 审批单（最后一击由用户点）
+const submitted = await p.eval(inF(/ZFFS/i, `(() => {
+  const b = doc.getElementById("ctl00_ContentPlaceHolder1_Btn_Save3") ||
+            [...doc.querySelectorAll("input[type=submit],input[type=button]")].find((e) => /提交线上审批/.test(e.value || ""));
+  if (!b) return false;
+  b.click(); return true;
+})()`)).catch(() => false);
+await sleep(12000);
+
+const approval = await p.eval(`(() => {
+  const pages = [];
+  try { pages.push(location.href); } catch (e) {}
+  return pages.join(" ");
+})()`).catch(() => "");
+say("提交线上审批", !!submitted, submitted ? "已点（弹窗后需在审批单页操作）" : "没找到按钮");
+
 await p.bringToFront();
-await p.banner("✅ 已到支付方式页 — 请核对金额与发票，然后手动：对私支付 → 本人 → 金额 → 新增 → 确认提交审批", { color: "#059669", pulse: false });
+await p.banner("🏁 已到审批单阶段 — 请在审批单页核对附件与担保人，最后自己点【确认提交审批】", { color: "#059669", pulse: false });
 process.stdout.write("\x07");
+console.log("\n下一步：审批单页 → 上传附件 → 编辑流程加担保人 → 你自己点【确认提交审批】。");
 
 console.log("\n=== 汇总 ===");
 for (const [o, k, m] of log) console.log(`${o ? "✅" : "❌"} ${k}: ${m}`);
