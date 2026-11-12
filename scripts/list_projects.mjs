@@ -44,8 +44,16 @@ const rows = await page.eval(`(() => {
   return out.filter((r) => (seen.has(r.code) ? false : (seen.add(r.code), true)));
 })()`);
 
+// 只保留「现在能选」的：有余额 + 没过授权截止日期
+const today = new Date();
+const ymd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
+const usable = rows.filter((r) => Number(r.balance || 0) > 0 && (!r.expiry || r.expiry >= ymd));
+const dropped = rows.filter((r) => !usable.includes(r));
+
 mkdirSync(resolve(ROOT, "invoices"), { recursive: true });
-writeFileSync(resolve(ROOT, "invoices", "projects.json"), JSON.stringify(rows, null, 1), "utf8");
-console.log(`抓到 ${rows.length} 个项目，已写入 invoices/projects.json`);
-for (const r of rows.slice(0, 15)) console.log(`  ${r.code}  ${r.name.slice(0, 30)}  ¥${r.balance}`);
+writeFileSync(resolve(ROOT, "invoices", "projects_all.json"), JSON.stringify(rows, null, 1), "utf8");
+writeFileSync(resolve(ROOT, "invoices", "projects.json"), JSON.stringify(usable, null, 1), "utf8");
+console.log(`共 ${rows.length} 个项目：可用 ${usable.length} 个，过滤掉 ${dropped.length} 个（余额为 0 或已过授权截止日期）`);
+for (const r of usable) console.log(`  ✅ ${r.code}  ${r.name.slice(0, 26)}  ¥${r.balance}${r.expiry ? "  截止 " + r.expiry : ""}`);
+for (const r of dropped) console.log(`  ✗ ${r.code}  ${r.name.slice(0, 26)}  ¥${r.balance}${r.expiry ? "  截止 " + r.expiry : ""}`);
 process.exit(0);
