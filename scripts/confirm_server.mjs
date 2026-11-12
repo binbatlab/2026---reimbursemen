@@ -1,4 +1,4 @@
-﻿import { createServer } from "node:http";
+import { createServer } from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { readConfig, saveConfig } from "./config.mjs";
@@ -20,6 +20,19 @@ function lastValues() {
   const d = cfg.defaults || {};
   let draft = {};
   try { if (existsSync(DRAFT)) draft = JSON.parse(readFileSync(DRAFT, "utf8").replace(/^\uFEFF/, "")); } catch { /* 忽略 */ }
+
+  // 住宿：有发票就走实报（不包干），并带出天数/金额；没有就包干
+  let hotel = { count: 0, nights: 0, total: "0.00" };
+  try {
+    const ds = JSON.parse(readFileSync(resolve(ROOT, "invoices", "dataset.json"), "utf8").replace(/^\uFEFF/, ""));
+    const hs = (ds.invoices || []).filter((i) => i.kind === "住宿");
+    hotel = {
+      count: hs.length,
+      nights: hs.reduce((s, i) => s + (Number(i.nights || i.qty) || 0), 0),
+      total: hs.reduce((s, i) => s + Number(i.total || 0), 0).toFixed(2),
+    };
+  } catch { /* 没有解析结果就跳过 */ }
+
   // 审批人：上次确认页填的优先，其次用记住的默认值
   const aps = (last && Array.isArray(last.approvers) && last.approvers.length)
     ? last.approvers
@@ -28,7 +41,8 @@ function lastValues() {
     project: (last && last.project) || d.project || "",
     reason: draft.reason || (last && last.reason) || "",
     title: (last && last.title) || d.title || "",
-    hotel: (last && last.hotel) || d.hotel || "none",
+    hotel: hotel.count > 0 ? "invoice" : ((last && last.hotel) || d.hotel || "baogan"),
+    hotelInfo: hotel,
     car: (last && last.car) || d.car || "qiche",
     remark: draft.remark || (last && last.remark) || "",
     payMethod: (last && last.payMethod) || d.payMethod || "private_self",
@@ -45,6 +59,17 @@ const FILL_JS = `
   function pick(name, v) { if (!v) return; var el = document.querySelector('input[name="' + name + '"][value="' + v + '"]'); if (el) el.checked = true; }
   setVal('reason', d.reason); setVal('title', d.title); setVal('remark', d.remark);
   pick('hotel', d.hotel); pick('car', d.car); pick('pay', d.payMethod); setVal('project', d.project);
+  // 住宿发票提示：有票 → 实报（不包干），没有 → 包干
+  var hi = document.getElementById('hotelInfo');
+  if (hi) {
+    var h = d.hotelInfo || {};
+    if (h.count > 0) {
+      hi.innerHTML = '检测到 <b>' + h.count + '</b> 张住宿发票，共 <b>' + h.nights + '</b> 晚，合计 <b>¥' + h.total +
+        '</b> → 按<b>实报（不包干）</b>，天数和金额会自动填进单据';
+    } else {
+      hi.innerHTML = '未检测到住宿发票 → 按<b>包干</b>处理（不填天数和金额）';
+    }
+  }
   var aps = d.approvers || [];
   aps.slice(0, 2).forEach(function (a, i) {
     setVal('ap_no' + (i + 1), a.no);

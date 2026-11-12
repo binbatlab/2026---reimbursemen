@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """发票解析 + 一致性校验：把 PDF 文本变成结构化数据，并在填单前先自证一遍。
 用法: python _tools/invoice_parse.py
 输入: invoices/raw/texts.json
@@ -66,6 +66,18 @@ def parse_invoice(name, text):
             r = re.search(r"([\u4e00-\u9fa5]{2,6})[-—]([\u4e00-\u9fa5]{2,6})\s+([A-Z]{2}\d{3,4})", note.group(1))
             if r:
                 inv["from"], inv["to"], inv["flight"] = r.group(1), r.group(2), r.group(3)
+    elif re.search(r"住宿服务|住宿费|酒店|宾馆|旅馆|民宿|旅店", text):
+        inv["kind"] = "住宿"
+        # 天数：优先票面写的「X晚 / X间夜 / 共X天」，否则由出发/返回日期推算
+        n = re.search(r"(\d+)\s*(?:晚|间夜)", text) or re.search(r"共\s*(\d+)\s*天", text)
+        if n:
+            inv["nights"] = int(n.group(1))
+        m2 = re.search(r"\*住宿服务\*[^\n]*?([\d.]+)\s+(\d+)\s+([\d.]+)\s+(\d+)%", text)
+        if m2:
+            inv["unit_price"] = money(m2.group(1))
+            inv["qty"] = int(m2.group(2))
+            inv["amount_ex_tax"] = money(m3) if False else money(m2.group(3))
+            inv["tax_rate"] = m2.group(4) + "%"
     elif re.search(r"交通运输服务|客运服务|网约车|出租客运", text):
         inv["kind"] = "网约车"
         m = re.search(r"\*交通运输服务\*[^\n]*?([\d.]+)\s+1\s+([\d.]+)\s+(\d+)%\s+([\d.]+)", text)
@@ -183,10 +195,13 @@ def main():
     air = [i for i in invoices if i["kind"] == "机票"]
     car = [i for i in invoices if i["kind"] == "网约车"]
     other = [i for i in invoices if i["kind"] == "其他"]
+    hotel = [i for i in invoices if i["kind"] == "住宿"]
     total_air = sum((i["total"] for i in air if i.get("total")), D("0"))
     total_car = sum((i["total"] for i in car if i.get("total")), D("0"))
     total_other = sum((i["total"] for i in other if i.get("total")), D("0"))
-    grand_total = total_air + total_car + total_other
+    total_hotel = sum((i["total"] for i in hotel if i.get("total")), D("0"))
+    hotel_nights = sum((i.get("nights") or i.get("qty") or 0) for i in hotel)
+    grand_total = total_air + total_car + total_other + total_hotel
 
     seq = sorted(
         [(t["date"], t["time"], t["city"], t.get("from") or t["segment"], t.get("to") or "", t["amount"], t["type"])
@@ -202,10 +217,15 @@ def main():
         L.append(f"    票号 {inv.get('number')}   销售方 {inv.get('seller')}")
         if inv.get("flight"):
             L.append(f"    {inv['travel_date']} {inv['from']}->{inv['to']} {inv['flight']}")
+        if inv.get("kind") == "住宿":
+            nights = inv.get("nights") or inv.get("qty") or "?"
+            L.append(f"    住宿 {nights} 晚")
         if inv.get("from") and not inv.get("flight"):
             L.append(f"    {inv['from']} -> {inv['to']}" + (f"  ({inv['flight_ref']})" if inv.get("flight_ref") else ""))
     L.append("")
     parts = [f"机票 ¥{total_air}", f"网约车 ¥{total_car}"]
+    if total_hotel:
+        parts.append(f"住宿 ¥{total_hotel}（{hotel_nights} 晚）")
     if total_other:
         parts.append(f"其他(日常) ¥{total_other}")
     L.append(" + ".join(parts) + f" = 合计 ¥{grand_total}")
@@ -247,7 +267,8 @@ def main():
                          "stated_total": str(it.get("stated_total")) if it.get("stated_total") is not None else None,
                          "trips": [enc(t) for t in it["trips"]]} for it in itineraries],
         "summary": {"air_total": str(total_air), "car_total": str(total_car),
-                    "other_total": str(total_other), "grand_total": str(grand_total)},
+                    "other_total": str(total_other), "hotel_total": str(total_hotel),
+                    "hotel_nights": hotel_nights, "grand_total": str(grand_total)},
         "attachments": attachments, "errors": errors, "warnings": warns,
     }
     with io.open("invoices/dataset.json", "w", encoding="utf-8") as fh:

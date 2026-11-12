@@ -265,6 +265,37 @@ async function pick(rowCtl, keep, label) {
 await pick("GV_CLF_ctl02", air.map((i) => i.number), "挂机票");
 await pick("GV_CLF_ctl04", car.map((i) => i.number), "挂网约车");
 
+// 9.5 住宿：按「有票就走实报（不包干）」的规则处理
+const hotel = ds.invoices.filter((i) => i.kind === "住宿");
+if (hotel.length) {
+  const rowCtl = await p.eval(inF(/clfbx_simple/i, `
+    const btn = [...doc.querySelectorAll("input[id*='BTN_XZFP']")].find((b) => {
+      const tr = b.closest("tr"); return tr && /住宿/.test(tr.innerText || "");
+    });
+    if (!btn) return null;
+    const m = (btn.id || "").match(/(GV_CLF_ctl\\d+)/);
+    return m ? m[1] : null;`));
+  const nights = hotel.reduce((s, i) => s + (i.nights || i.qty || 0), 0);
+  if (rowCtl) {
+    await pick(rowCtl, hotel.map((i) => i.number), "挂住宿票");
+    // 有「天数」输入框就填上住宿晚数
+    const got = await p.eval(inF(/clfbx_simple/i, `
+      const btn = doc.getElementById("ctl00_ContentPlaceHolder1_${rowCtl}_BTN_XZFP");
+      const row = btn && btn.closest("tr");
+      if (!row) return "no row";
+      const el = [...row.querySelectorAll("input")].find((e) => /天|TS|TSL|ZS/.test(e.id || ""));
+      if (!el) return "no days field";
+      el.value = ${JSON.stringify(String(nights))};
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return el.id;`));
+    say("住宿", true, `${hotel.length} 张票 / ${nights} 晚（天数框: ${got}）`);
+  } else {
+    say("住宿", false, "有住宿发票但没找到「住宿」行，需人工确认");
+  }
+} else {
+  say("住宿", true, "无住宿发票 → 按包干处理");
+}
+
 // 10 保存（只一次）
 await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_SAVE"); if(b) b.click();`));
 await sleep(10000);
