@@ -46,7 +46,7 @@ function lastValues() {
   const lastAmount = last ? num(last.hotelAmount) : 0;
   const hotelDays = lastDays > 0 ? String(lastDays) : (hotel.nights > 0 ? String(hotel.nights) : "");
   const hotelAmount = lastAmount > 0 ? lastAmount.toFixed(2) : (Number(hotel.total) > 0 ? hotel.total : "");
-  let hotelMode = num(hotelAmount) > 0 ? "invoice" : (num(hotelDays) > 0 ? "baogan" : "none");
+  let hotelMode = (last && last.hotelMode) || (num(hotelAmount) > 0 ? "invoice" : (num(hotelDays) > 0 ? "baogan" : "none"));
   const projectForRule = String((last && last.project) || d.project || "").trim();
   if (/^2/.test(projectForRule)) hotelMode = "invoice";   // 2 开头：必须不包干
 
@@ -61,20 +61,34 @@ function lastValues() {
   return {
     project: (last && last.project) || d.project || "",
     projects,
-    reason: draft.reason || (last && last.reason) || "",
+    reason: (last && last.reason) || draft.reason || "",
     title: (last && last.title) || d.title || "",
     hotel: hotelMode,
     hotelMode,
     hotelDays,
     hotelAmount,
     hotelInfo: hotel,
-    hotelCity: (last && last.hotelCity) || (ds && (ds.invoices || []).filter((i) => i.kind === "住宿").map((i) => i.city || "").filter(Boolean)[0]) || "",
+    dateFrom: (last && last.dateFrom) || (ds && (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.date)).filter(Boolean).sort()[0]) || "",
+    dateTo: (last && last.dateTo) || (ds && (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.date)).filter(Boolean).sort().slice(-1)[0]) || "",
+    cities: (last && last.cities) || (() => {
+      if (!ds) return "";
+      const all = (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.city)).filter(Boolean);
+      const uniq = [...new Set(all)];
+      const dest = uniq.length > 1 ? uniq.slice(1) : uniq;
+      return dest.join("/");
+    })(),
+    hotelCity: (last && last.hotelCity) || (() => {
+      if (!ds) return "";
+      const all = (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.city)).filter(Boolean);
+      const uniq = [...new Set(all)];
+      return (uniq.length > 1 ? uniq.slice(1) : uniq).slice(-1)[0] || "";
+    })(),
     hotelInvoices: (last && Number(last.hotelInvoices)) || (hotel.count > 0 ? 1 : 0),
     name: (last && last.name) || "",
     people,
     transport,
     car: (last && last.car) || d.car || "qiche",
-    remark: draft.remark || (last && last.remark) || "",
+    remark: (last && last.remark) || draft.remark || "",
     payMethod: (last && last.payMethod) || d.payMethod || "private_self",
     approvers: aps,
     hadLast: !!last,
@@ -107,6 +121,7 @@ const FILL_JS = `
   }
   setVal('hotelDays', d.hotelDays); setVal('hotelAmount', d.hotelAmount); setVal('people', d.people);
   setVal('hotelCity', d.hotelCity); setVal('hotelInvoices', d.hotelInvoices);
+  setVal('dateFrom', d.dateFrom); setVal('dateTo', d.dateTo); setVal('cities', d.cities);
   // 住宿模式：2 开头强制不包干；9 开头用户可选
   function applyHotelRule() {
     var pv = (document.getElementById('project') || {}).value || '';
@@ -243,7 +258,7 @@ const server = createServer((req, res) => {
         const forced = /^2/.test(String(data.project || "").trim());
         data.hotelMode = forced ? "invoice" : (data.hotelMode || (data.hotelAmount > 0 ? "invoice" : "baogan"));
         data.hotel = data.hotelDays > 0 ? data.hotelMode : "none";
-        data.hotelInvoices = data.hotelMode === "invoice" && data.hotelDays > 0 ? Number(data.hotelInvoices || 2) : 0;
+        data.hotelInvoices = data.hotelMode === "invoice" && data.hotelDays > 0 ? Number(data.hotelInvoices || 1) : 0;
         data.people = Math.max(1, Math.floor(Number(data.people) || 1));
         data._submittedAt = new Date().toISOString();
         mkdirSync(resolve(ROOT, "invoices"), { recursive: true });

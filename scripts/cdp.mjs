@@ -34,6 +34,11 @@ export async function ensureBrowser({ profileDir, headless = false } = {}) {
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-features=Translate,MediaRouter",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--no-sandbox",
     `--user-data-dir=${profileDir}`,
     "about:blank",
   ];
@@ -63,6 +68,10 @@ export class Browser {
       this.ws.addEventListener("open", res, { once: true });
       this.ws.addEventListener("error", () => rej(new Error("CDP WebSocket 连接失败")), { once: true });
     });
+    this.ws.addEventListener("close", () => {
+      for (const [, p] of this.pending) { try { p.rej(new Error("CDP 连接已断开")); } catch {} }
+      this.pending.clear();
+    });
     this.ws.addEventListener("message", (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.id !== undefined) {
@@ -71,18 +80,36 @@ export class Browser {
         this.pending.delete(msg.id);
         msg.error ? p.rej(new Error(`${msg.error.message} (${msg.error.code})`)) : p.res(msg.result);
       } else {
+        // 任何会话弹出 alert/confirm 都自动确认，避免页面被弹窗卡死
+        if (msg.method === "Page.javascriptDialogOpening") {
+          this.send("Page.handleJavaScriptDialog", { accept: true }, msg.sessionId).catch(() => {});
+        }
         for (const fn of this.listeners) fn(msg);
       }
     });
     return this;
   }
 
-  send(method, params = {}, sessionId) {
+  send(method, params = {}, sessionId, timeoutMs = 15000) {
     const id = ++this.seq;
     const payload = { id, method, params };
     if (sessionId) payload.sessionId = sessionId;
-    this.ws.send(JSON.stringify(payload));
-    return new Promise((res, rej) => this.pending.set(id, { res, rej }));
+    try {
+      this.ws.send(JSON.stringify(payload));
+    } catch (e) {
+      return Promise.reject(new Error(`CDP 发送失败: ${method} (${e.message})`));
+    }
+    // 关键：CDP 不回包时不能无限挂起（页面回发/上下文销毁很常见）
+    return new Promise((res, rej) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        rej(new Error(`CDP 超时(${Math.round(timeoutMs / 1000)}s): ${method}`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        res: (v) => { clearTimeout(timer); res(v); },
+        rej: (e) => { clearTimeout(timer); rej(e); },
+      });
+    });
   }
 
   on(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
@@ -121,11 +148,44 @@ export class Browser {
   }
 }
 
+
+// 浏览器/页面卡死时的自愈：探测 → 重启 Chrome → 重新附着页面
+export async function reviver({ profileDir, pageHint } = {}) {
+  let ver = null;
+  try { ver = await httpJson("/json/version"); } catch { ver = null; }
+  if (!ver) {
+    console.log("   ↻ 浏览器没响应，正在重启…");
+    try { spawn("taskkill", ["/F", "/IM", "chrome.exe"], { stdio: "ignore" }); } catch {}
+    await new Promise((r) => setTimeout(r, 2500));
+    ver = await ensureBrowser({ profileDir });
+  }
+  const browser = await new Browser(ver.webSocketDebuggerUrl).connect();
+  let page = null;
+  try {
+    page = pageHint ? await browser.attachExisting(pageHint) : null;
+    if (!page) page = await browser.attachExisting(() => true);
+    if (!page) page = await browser.newPage("about:blank");
+    await page.init().catch(() => {});
+  } catch (e) {
+    console.log("   ! 重新附着页面失败:", e.message);
+  }
+  console.log("   ✓ 已恢复连接");
+  return { ver, browser, page };
+}
+
 export class Page {
   constructor(browser, targetId, sessionId) {
     this.browser = browser; this.targetId = targetId; this.sessionId = sessionId;
   }
   send(method, params) { return this.browser.send(method, params, this.sessionId); }
+
+  // 轻量探活：3 秒没回应就认为页面/浏览器挂了
+  async ping() {
+    try {
+      const r = await this.browser.send("Runtime.evaluate", { expression: "1+1", returnByValue: true }, this.sessionId, 3000);
+      return !!r && r.result && r.result.value === 2;
+    } catch { return false; }
+  }
 
   async init() {
     await this.send("Page.enable");
@@ -149,6 +209,7 @@ export class Page {
     if (r.exceptionDetails) {
       throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
     }
+    if (!r.result || r.result.value === undefined) return null;   // 统一成 null，避免 undefined 到处炸
     return r.result.value;
   }
 

@@ -86,6 +86,18 @@
     </div>
 
     <div class="card">
+      <h2>3.5 出差行程 <span style="font-size:12px;color:#888">（差旅专用，已按票据带出，可改）</span></h2>
+      <div class="row2">
+        <label>出发日期<input type="text" id="dateFrom" placeholder="2026-11-09"></label>
+        <label>返回日期<input type="text" id="dateTo" placeholder="2026-11-10"></label>
+      </div>
+      <div class="row2">
+        <label>出差地点<input type="text" id="cities" placeholder="上海/苏州"></label>
+      </div>
+      <div class="hint">出差地点写「城市/城市」，系统据此算住宿标准与补助；日期来自票据，一般不用改。</div>
+    </div>
+
+    <div class="card">
       <h2>4. 住宿：包干还是不包干 <span style="font-size:12px;color:#888">（差旅专用，无纸化报销可忽略）</span></h2>
       <div id="hotelInfo" class="hint">正在检测住宿发票…</div>
       <label class="opt"><input type="radio" name="hotelMode" value="baogan" checked>
@@ -168,6 +180,11 @@ f.addEventListener('submit', async (e) => {
   if (!reason) { err.textContent = '出差事由不能为空'; document.getElementById('reason').focus(); return; }
   const title = document.getElementById('title').value.trim();
   if (!title) { err.textContent = '职称职别不能为空'; document.getElementById('title').focus(); return; }
+  const df = (document.getElementById('dateFrom').value || '').trim();
+  const dt = (document.getElementById('dateTo').value || '').trim();
+  const ct = (document.getElementById('cities').value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(df) || !/^\d{4}-\d{2}-\d{2}$/.test(dt)) { err.textContent = '出差起止日期要填成 2026-11-09 这种格式'; return; }
+  if (!ct) { err.textContent = '出差地点不能为空（写「城市/城市」）'; document.getElementById('cities').focus(); return; }
   const rawDays = document.getElementById('hotelDays').value.trim();
   const rawAmount = document.getElementById('hotelAmount').value.trim();
   const hotelDays = rawDays === '' ? 0 : Number(rawDays);
@@ -195,6 +212,9 @@ f.addEventListener('submit', async (e) => {
     hotelInvoices,
     hotelDays,
     hotelAmount,
+    dateFrom: (document.getElementById('dateFrom').value || '').trim(),
+    dateTo: (document.getElementById('dateTo').value || '').trim(),
+    cities: (document.getElementById('cities').value || '').trim(),
     hotelCity: (document.getElementById('hotelCity').value || '').trim(),
     hotelInvoices: Number(document.getElementById('hotelInvoices').value || 0),
     name: '',   // 出差人姓名 = 登录本人，由脚本从页面读取，不用用户填
