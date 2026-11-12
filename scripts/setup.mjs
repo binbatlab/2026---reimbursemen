@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { readConfig, saveConfig, configPath } from "./config.mjs";
 
-const PORT = Number(process.env.YWTB_SETUP_PORT || 8799);
+const BASE_PORT = Number(process.env.YWTB_SETUP_PORT || 8799);
+let PORT = BASE_PORT;                 // 端口被占用时自动往后找
 const ROOT = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 const CRED = join(ROOT, "scripts", "cred.ps1");
 
@@ -92,9 +93,27 @@ const server = createServer((req, res) => {
   res.writeHead(404); res.end("not found");
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  const cfg = readConfig();
-  console.log(`设置页已启动：http://127.0.0.1:${PORT}/`);
-  if (cfg.staffNo) console.log(`（当前已保存的工号：${cfg.staffNo}）`);
-  console.log("请在浏览器里打开上面的地址完成设置，保存后本窗口会自动结束。");
-});
+function tryListen(port, attempt = 0) {
+  server.once("error", (e) => {
+    if (e.code === "EADDRINUSE" && attempt < 20) {
+      console.log(`端口 ${port} 被占用，换 ${port + 1}`);
+      PORT = port + 1;
+      tryListen(PORT, attempt + 1);
+    } else {
+      console.error("设置页启动失败:", e.message);
+      process.exit(1);
+    }
+  });
+  server.listen(port, "127.0.0.1", () => {
+    const url = `http://127.0.0.1:${port}/`;
+    const cfg = readConfig();
+    console.log(`设置页已启动：${url}`);
+    if (cfg.staffNo) console.log(`（当前已保存的工号：${cfg.staffNo}）`);
+    if (!process.argv.includes("--no-open")) {
+      try { execFile("rundll32", ["url.dll,FileProtocolHandler", url], { windowsHide: true }); } catch { /* 忽略 */ }
+      console.log("已自动打开浏览器；没弹出的话手动访问上面的地址。");
+    }
+    console.log("保存后本窗口会自动结束。");
+  });
+}
+tryListen(BASE_PORT);

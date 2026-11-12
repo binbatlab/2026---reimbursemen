@@ -4,7 +4,9 @@ import { resolve } from "node:path";
 import { readConfig, saveConfig } from "./config.mjs";
 
 const ROOT = process.env.YWTB_WORKDIR || resolve(import.meta.dirname, "..");
-const PORT = Number(process.env.CONFIRM_PORT || 8787);
+const BASE_PORT = Number(process.env.CONFIRM_PORT || 8787);
+let PORT = BASE_PORT;
+const { execFile } = await import("node:child_process");
 const html = readFileSync(resolve(import.meta.dirname, "review.html"), "utf8");
 const CONFIRM = resolve(ROOT, "invoices", "confirm.json");
 const DRAFT = resolve(ROOT, "invoices", "draft.json");
@@ -105,9 +107,21 @@ const server = createServer((req, res) => {
   res.writeHead(404); res.end("not found");
 });
 
-server.listen(PORT, "127.0.0.1", () => {
+function tryListen(port, attempt = 0) {
+  server.once("error", (e) => {
+    if (e.code === "EADDRINUSE" && attempt < 20) { PORT = port + 1; tryListen(PORT, attempt + 1); }
+    else { console.error("确认页启动失败:", e.message); process.exit(1); }
+  });
+  server.listen(port, "127.0.0.1", () => {
+  const url = `http://127.0.0.1:${port}/`;
   const v = lastValues();
-  console.log(`确认页已启动: http://127.0.0.1:${PORT}/`);
+  console.log(`确认页已启动: ${url}`);
   if (v.hadLast) console.log("（已带出上次填写的内容，可直接确认或修改）");
   if (v.approvers.length) console.log(`（记住的审批人：${v.approvers.map((a) => a.no).join(", ")}）`);
-});
+  if (!process.argv.includes("--no-open")) {
+    try { execFile("rundll32", ["url.dll,FileProtocolHandler", url], { windowsHide: true }); } catch {}
+    console.log("已自动打开浏览器；保存后本窗口结束。");
+  }
+  });
+}
+tryListen(BASE_PORT);

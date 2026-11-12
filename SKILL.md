@@ -27,7 +27,7 @@ launch.ps1 -Script <脚本> -ScriptArgs a,b  # 跑脚本（参数用逗号分隔
 ## 首次使用（不要让用户碰命令行）
 
 **怎么判断是不是第一次**：技能根目录下没有 `.ywtb.config.json` → 第一次，先跑设置页；已经存在 → 跳过，别重复弹。
-1. 助手先跑：`launch.ps1 -Script scripts\setup.mjs`，会起一个本地设置页 `http://127.0.0.1:8799/`
+1. 助手先跑：`launch.ps1 -Script scripts\setup.mjs`，会起一个本地设置页并**自动打开浏览器**（默认 `http://127.0.0.1:8799/`；端口被占用会自动 +1，以脚本打印的地址为准）
 2. 让用户在这个网页里填 **工号 + 密码**（勾「记住密码」），点「保存并开始」
    - 工号写入 `.ywtb.config.json`
    - 密码用 Windows DPAPI 加密存 `.ywtb.cred`，只有本机本账户能解开
@@ -63,7 +63,7 @@ launch.ps1 -Script invoice_parse.py
 launch.ps1 -Script confirm_server.mjs
 ```
 
-打开 `http://127.0.0.1:8787/`，用户填完点提交 → 写入 `invoices/confirm.json`。
+自动打开 `http://127.0.0.1:8787/`（端口占用会自动换），用户填完点提交 → 写入 `invoices/confirm.json`。
 
 必须由用户决定的：
 - **经费项目**（钱从哪个项目出）
@@ -93,7 +93,7 @@ launch.ps1 -Script confirm_server.mjs
 **不需要用户自己写事由和备注**，AI 按票面大致写给出来就行。
 ### 3.5 一次性把「要人决定的事」问完（本地确认页）
 
-`launch.ps1 -Script scripts\confirm_server.mjs` 打开 `http://127.0.0.1:8787/`，**一次问全**：
+`launch.ps1 -Script scripts\confirm_server.mjs` 自动打开 `http://127.0.0.1:8787/`（端口占用会自动换），**一次问全**：
 
 - 经费项目（带余额，只有你负责的会出现）
 - 报销事由 / 备注（≤50 字）
