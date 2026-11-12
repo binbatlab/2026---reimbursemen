@@ -1,4 +1,4 @@
-﻿// 按 dataset.json + confirm.json 自动填「国内差旅报销」单据，停在上报支付方式页之前
+// 按 dataset.json + confirm.json 自动填「国内差旅报销」单据，停在上报支付方式页之前
 // 依赖：cdp.mjs、invoices/dataset.json、invoices/confirm.json、发票 PDF 目录
 import { ensureBrowser, Browser, sleep } from "./cdp.mjs";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -435,9 +435,30 @@ say("保存", true, "见 finance_recon/fill_saved.png");
 await p.eval(inF(/clfbx_simple/i, `const b=document.getElementById("ctl00_ContentPlaceHolder1_Btn_xmzffs"); if(b) b.click();`));
 await sleep(10000);
 await p.screenshot(join(D, "fill_payment.png"));
-say("进支付方式", true, "见 finance_recon/fill_payment.png");
+// 必须回读确认真的到了支付方式页，不能盲报成功
+const after = await p.eval(`(() => {
+  const w = window.frames["mainframe"];
+  return { url: w ? w.location.href : location.href,
+           text: (w ? w.document.body.innerText : (document.body.innerText || "")).replace(/\\s+/g, " ").slice(0, 200) };
+})()`).catch(() => ({ url: "", text: "" }));
+if (!/ZFFS/i.test(after.url)) {
+  const hint = await p.eval(`(() => {
+    const w = window.frames["mainframe"];
+    const t = w ? (w.document.body.innerText || "") : (document.body.innerText || "");
+    const m = t.match(/(请填写[^。！\\n]{2,20}|请您[^。！\\n]{2,30}|[^。！\\n]{0,8}不能为空)/);
+    return m ? m[1] : "";
+  })()`).catch(() => "");
+  say("进支付方式", false, `停在 ${after.url.slice(0, 55)}${hint ? "；系统提示：" + hint : ""}`);
+  console.log("\n=== 汇总 ===");
+  for (const [o, k, m] of log) console.log(`${o ? "✅" : "❌"} ${k}: ${m}`);
+  console.log("\n⚠️ 没到支付方式页 = 系统校验没通过（常见：住宿明细未填、姓名空、票未挂）。");
+  await p.bringToFront();
+  await p.banner(`⚠️ 没进支付方式：${hint || "系统校验未通过"}`, { color: "#dc2626", pulse: false });
+  process.exit(4);
+}
+say("进支付方式", true, after.url.slice(0, 70));
 await p.bringToFront();
-await p.banner("✅ 填报完成 — 请核对金额与发票，然后手动：对私支付 → 本人 → 金额 → 新增 → 确认提交审批", { color: "#059669", pulse: false });
+await p.banner("✅ 已到支付方式页 — 请核对金额与发票，然后手动：对私支付 → 本人 → 金额 → 新增 → 确认提交审批", { color: "#059669", pulse: false });
 process.stdout.write("\x07");
 
 console.log("\n=== 汇总 ===");
