@@ -26,6 +26,7 @@ launch.ps1 -Script <脚本> -ScriptArgs a,b  # 跑脚本（参数用逗号分隔
 
 ## 首次使用（不要让用户碰命令行）
 
+**怎么判断是不是第一次**：技能根目录下没有 `.ywtb.config.json` → 第一次，先跑设置页；已经存在 → 跳过，别重复弹。
 1. 助手先跑：`launch.ps1 -Script scripts\setup.mjs`，会起一个本地设置页 `http://127.0.0.1:8799/`
 2. 让用户在这个网页里填 **工号 + 密码**（勾「记住密码」），点「保存并开始」
    - 工号写入 `.ywtb.config.json`
