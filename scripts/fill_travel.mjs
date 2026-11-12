@@ -66,6 +66,20 @@ console.log(`单据: ${air.length} 机票 ¥${AIR_TOTAL} + 网约车实报 ${car
 console.log(`市内交通: ${TP.ok ? TP.days.map((d) => `${d.date.slice(5)} ¥${d.amount}${d.mode === "subsidy" ? "补助" : "实报"}`).join(" / ") : TP.why}`);
 console.log(`日期: ${D1} ~ ${D2}  城市: ${CITIES}  项目: ${PROJECT}`);
 
+// 等某个 frame 真正就绪（导航/回发期间 location 会抛错，必须重试而不是硬等）
+async function waitFrame(re, probeExpr = "true", timeoutMs = 45000) {
+  const t0 = Date.now();
+  let last = "";
+  while (Date.now() - t0 < timeoutMs) {
+    const r = await p.eval(inF(re, `try { return { ok: !!(${probeExpr}) }; } catch (e) { return { ok: false, why: e.message }; }`)).catch(() => null);
+    if (r && r.ok === true) return true;
+    if (r && r.why) last = r.why;
+    await sleep(800);
+  }
+  if (last) console.log(`   ! 等 frame 超时（${last}）`);
+  return false;
+}
+
 // 卡死自愈：页面 3 秒不应答就重启浏览器并重新进入系统
 async function guard(tag) {
   if (await p.ping()) { pAlive = true; return true; }
@@ -197,7 +211,9 @@ say("报销人", true, `${who.name || ""} ${user}`);
 await type(/xmjbxx/i, "TB_BXR", user);
 await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: "\r" });
 await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-await sleep(5000);
+await sleep(1500);
+await waitFrame(/xmjbxx/i, 'doc.readyState === "complete" && !!doc.getElementById("ctl00_ContentPlaceHolder1_TB_BXR")');
+await sleep(1500);
 
 // 3.5 续填时，报销人一回车系统可能直接跳到明细页；那就别再做「选项目/下一步」
 const onDetail = await p.eval(inF(/clfbx_simple/i, `return !!doc.getElementById("ctl00_ContentPlaceHolder1_BT_ZSFMX");`)).catch(() => false);
@@ -396,22 +412,29 @@ if (!onDetail) {
   }
   const projAfter = await projValue();
   say("选项目", projAfter === PROJECT, `${PROJECT}（页面显示 ${projAfter}）`);
+  if (projAfter !== PROJECT) {
+    console.log("\n❌ 项目没选上（页面项目号是「" + (projAfter === null ? "空" : projAfter) + "」），不再往下填，避免产生脏数据。");
+    console.log("   请回浏览器点【选择经费】选一次项目，再重跑。");
+    process.exit(5);
+  }
 
   // 5 明细页
   await p.eval(inF(/xmjbxx/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_NEW_NR1"); if(b) b.click();`));
-  await sleep(9000);
+  await waitFrame(/clfbx_simple/i, '!!doc.getElementById("ctl00_ContentPlaceHolder1_TXT_QSRQ")', 60000);
+  await sleep(1500);
 
 }
 
 // 6 主信息（正确顺序：日期 → 事由 → 姓名/职称/人数/地点 → 包干选项 → 住宿明细）
 const closePickers = async () => {
-  for (let i = 0; i < 3; i++) {
+  // ⚠ 只能用 Esc / blur 收起日历，千万不能点页面元素（点到标题/链接会整页跳走）
+  for (let i = 0; i < 2; i++) {
     await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
     await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
-    await sleep(350);
+    await sleep(250);
   }
-  await p.eval(inF(/clfbx_simple/i, `const h=doc.querySelector("h3,h2,.title,#divTitle"); if(h) h.click(); return true;`)).catch(() => false);
-  await sleep(500);
+  await p.eval(inF(/clfbx_simple/i, `try { doc.activeElement && doc.activeElement.blur(); } catch(e) {} return true;`)).catch(() => false);
+  await sleep(300);
 };
 
 // 等明细页稳定
@@ -735,6 +758,11 @@ if (wallet < NEED) {
 await closePicker();
 }
 
+// 7.9 先保存一次（实测：不保存，机票行的【行程单】按钮点了没反应）
+await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_SAVE"); if(b){b.click(); return true;} return false;`)).catch(() => false);
+await sleep(10000);
+say("保存(挂票后)", true, "已保存，准备挂行程单");
+
 // 8 行程单（每段一行）
 if (air.length) {
   await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_GV_CLF_ctl02_BTN_XCD_Cl"); if(b) b.click();`));
@@ -823,7 +851,16 @@ async function pick(rowCtl, keep, label) {
 // 行号优先按行名找（不同用户/不同模块行数可能不同），找不到再退回实测号
 const airRow = (await rowCtlByLabel("飞机")) || "GV_CLF_ctl02";
 if (air.length) await pick(airRow, air.map((i) => i.number), "挂机票");
-const carRow = (await rowCtlByLabel("汽车")) || "GV_CLF_ctl04";
+// 网约车挂到「市内交通补助」行（用户明确规则）；该行没有选择票据按钮时才退回「汽车」行
+const cityRow = await p.eval(inF(/clfbx_simple/i, `(() => {
+  const tr = [...doc.querySelectorAll("tr")].find((x) => /市内交通补助/.test(x.innerText || "") && x.querySelector("input[id*=BTN_XZFP]"));
+  if (!tr) return null;
+  const b = tr.querySelector("input[id*=BTN_XZFP]");
+  const m = (b.id || "").match(/(GV_CLF_ctl\\d+)/);
+  return m ? m[1] : null;
+})()`)).catch(() => null);
+const carRow = cityRow || (await rowCtlByLabel("汽车")) || "GV_CLF_ctl04";
+if (cityRow) console.log(`   网约车挂到市内交通补助行：${cityRow}`);
 if (carAttach.length) await pick(carRow, carAttach.map((i) => i.number), "挂网约车");
 else say("挂网约车", true, "每天都不超 80，全部领补助，不交票");
 
@@ -1048,6 +1085,23 @@ const approval = await p.eval(`(() => {
   return pages.join(" ");
 })()`).catch(() => "");
 say("提交线上审批", !!submitted, submitted ? "已点（弹窗后需在审批单页操作）" : "没找到按钮");
+
+// 审批单备注：确认页填了就写进去（限 50 字）
+if (cf.spbz) {
+  await sleep(6000);
+  try {
+    const wrote = await p.eval(`(() => {
+      const pages = [...document.querySelectorAll("textarea[id*=spbz]")];
+      const el = document.getElementById("ctl00_ContentPlaceHolder1_txt_spbz") || pages[0];
+      if (!el) return false;
+      el.value = ${JSON.stringify(String(cf.spbz).slice(0, 50))};
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return el.value;
+    })()`).catch(() => null);
+    if (wrote) say("审批单备注", true, String(wrote));
+    else console.log("   ! 审批单备注没写进去（可能审批单在另一个标签页）");
+  } catch {}
+}
 
 await p.bringToFront();
 await p.banner("🏁 已到审批单阶段 — 请在审批单页核对附件与担保人，最后自己点【确认提交审批】", { color: "#059669", pulse: false });

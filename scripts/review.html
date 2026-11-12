@@ -151,6 +151,10 @@
     <div class="card">
       <h2>9. 审批人 / 担保人</h2>
       <div class="hint">无纸化报销的审批流程至少要有一个担保人。填工号即可，姓名留空系统会自动带出。</div>
+      <div style="margin:10px 0 4px">
+        <label style="font-size:13px;color:var(--sub)">审批单备注（选填，限 50 字）
+          <input type="text" id="spbz" maxlength="50" placeholder="给审批人看的一句话，如：苏州无机场，从上海往返" style="margin-top:6px"></label>
+      </div>
       <table>
         <tr><th>角色</th><th>工号</th><th>姓名（可空）</th></tr>
         <tr><td>担保人</td><td><input id="ap_no1" placeholder="工号"></td><td><input id="ap_name1" placeholder="姓名"></td></tr>
@@ -221,6 +225,7 @@ f.addEventListener('submit', async (e) => {
     people,
     car: f.querySelector('input[name=car]:checked').value,
     remark: document.getElementById('remark').value.trim(),
+    spbz: (document.getElementById('spbz').value || '').trim(),
     payMethod: f.querySelector('input[name=pay]:checked').value,
     approvers: [['ap_no1','ap_name1'],['ap_no2','ap_name2']].map(([a,b])=>({ role:'担保人', no:(document.getElementById(a).value||'').trim(), name:(document.getElementById(b).value||'').trim() })).filter(x=>x.no),
   };
