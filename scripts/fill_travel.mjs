@@ -1,4 +1,15 @@
-﻿// 按 dataset.json + confirm.json 自动填「国内差旅报销」单据，停在上报支付方式页之前
+﻿// —— 浏览器守卫：连接断了给出明确提示，而不是半路 mysteriously 停住 ——
+process.on("unhandledRejection", (e) => {
+  const msg = String((e && e.message) || e);
+  if (/Target closed|Session closed|websocket|ECONNREFUSED|WebSocket/i.test(msg)) {
+    console.error("\n❌ 浏览器连接中断（skill 用的 Chrome 被关掉了或崩溃）。");
+    console.error("   单据没有丢：重跑一次会从「未提交单据」继续，或手动在该单据上点【修改】。");
+    process.exit(9);
+  }
+  console.error("未处理的错误:", msg);
+  process.exit(1);
+});
+// 按 dataset.json + confirm.json 自动填「国内差旅报销」单据，停在上报支付方式页之前
 // 依赖：cdp.mjs、invoices/dataset.json、invoices/confirm.json、发票 PDF 目录
 import { ensureBrowser, Browser, sleep } from "./cdp.mjs";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
