@@ -106,7 +106,7 @@ const FILL_JS = `
     pin.parentNode.replaceChild(sel, pin);
   }
   setVal('hotelDays', d.hotelDays); setVal('hotelAmount', d.hotelAmount); setVal('people', d.people);
-  setVal('hotelCity', d.hotelCity); setVal('hotelInvoices', d.hotelInvoices); setVal('travelerName', d.name);
+  setVal('hotelCity', d.hotelCity); setVal('hotelInvoices', d.hotelInvoices);
   // 住宿模式：2 开头强制不包干；9 开头用户可选
   function applyHotelRule() {
     var pv = (document.getElementById('project') || {}).value || '';
