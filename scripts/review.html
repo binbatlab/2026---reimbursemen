@@ -88,11 +88,11 @@
     <div class="card">
       <h2>3.5 出差行程 <span style="font-size:12px;color:#888">（差旅专用，已按票据带出，可改）</span></h2>
       <div class="row2">
-        <label>出发日期<input type="text" id="dateFrom" placeholder="2026-11-09"></label>
-        <label>返回日期<input type="text" id="dateTo" placeholder="2026-11-10"></label>
+        <label>出发日期<input type="text" id="dateFrom" placeholder="YYYY-MM-DD"></label>
+        <label>返回日期<input type="text" id="dateTo" placeholder="YYYY-MM-DD"></label>
       </div>
       <div class="row2">
-        <label>出差地点<input type="text" id="cities" placeholder="上海/苏州"></label>
+        <label>出差地点<input type="text" id="cities" placeholder="城市/城市"></label>
       </div>
       <div class="hint">出差地点写「城市/城市」，系统据此算住宿标准与补助；日期来自票据，一般不用改。</div>
     </div>
@@ -110,7 +110,7 @@
         <label>住宿金额（元）<input type="number" id="hotelAmount" min="0" step="0.01" placeholder="票面价税合计 / 包干按标准"></label>
       </div>
       <div class="row2">
-        <label>住宿城市<input type="text" id="hotelCity" placeholder="如 苏州"></label>
+        <label>住宿城市<input type="text" id="hotelCity" placeholder="住宿城市"></label>
         <label>住宿发票张数<input type="number" id="hotelInvoices" min="0" step="1" placeholder="包干填 0"></label>
       </div>
       <div class="hint">规则：<b>项目号 2 开头 → 必须不包干</b>（脚本锁定，不能选包干）；<b>9 开头 → 包干、不包干都可以</b>。不住就把天数、金额都填 0。城市取自出差地点。</div>

@@ -510,13 +510,43 @@ if (HD > 0 || HA > 0) {
 
     if (opened) {
       // 填本人那一行
+      const r1 = await p.eval(inF(/clfbx_simple/i, `(() => {
+        const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_ZSBT_ctl\\d+_TXT_YGBH/.test(tr.innerHTML || ""));
+        let row = rows.find((tr) => ((tr.querySelector("input[id*=TXT_YGBH]") || {}).value || "").trim() === ${JSON.stringify(String(user))});
+        if (!row) {
+          row = rows[0];
+          if (!row) return { ok: false, why: "一行都没有" };
+          const put0 = (sfx, v) => { const e = row.querySelector("input[id*='" + sfx + "']"); if (!e) return false; e.value = v; return true; };
+          put0("TXT_YGBH", ${JSON.stringify(String(user))});
+          put0("TB_XM", ${JSON.stringify(String(TRAVELER))});
+          put0("TB_RS", "1");
+        }
+        const put = (sfx, v) => { const e = row.querySelector("input[id*='" + sfx + "']"); if (!e) return false; e.value = v; return true; };
+        const a = put("TB_ZSTS_D", ${JSON.stringify(String(HD))});
+        const b = put("TB_FPZS", ${JSON.stringify(String(HI))});
+        const c = put("TB_ZSJE", ${JSON.stringify(HA.toFixed(2))});
+        return { ok: a && b && c, a, b, c };
+      })()`)).catch((e) => ({ ok: false, why: e.message }));
+      say("住宿明细·填数", !!(r1 && r1.ok), (r1 && r1.why) || `${HD} 天 / ${HI} 张 / ¥${HA.toFixed(2)}`);
+
+      // 逐字段回读，确认填写完整（天数/张数/金额/城市）
       const openedDlg = await p.eval(inF(/clfbx_simple/i, `(() => {
-        // 绿色 + 在文档里直接找（不一定在当前 tr 内）
-        const imgs = [...doc.querySelectorAll("img[id*=Img_ZSDD],input[id*=Img_ZSDD]")];
-        if (!imgs.length) return { ok: false, why: "没有 Img_ZSDD 控件" };
-        imgs[0].scrollIntoView({ block: "center" });
-        imgs[0].click();
-        return { ok: true, count: imgs.length };
+        // 优先按 id 找绿色 +；找不到就按「住宿地点」那一列里的图片找
+        let img = doc.querySelector("img[id*=Img_ZSDD],input[id*=Img_ZSDD]");
+        if (!img) {
+          const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_ZSBT_ctl\d+_TXT_YGBH/.test(tr.innerHTML || ""));
+          const row = rows.find((tr) => ((tr.querySelector("input[id*=TXT_YGBH]") || {}).value || "").trim() === ${JSON.stringify(String(user))}) || rows[0];
+          if (row && row.cells) {
+            for (let i = 5; i < Math.min(row.cells.length, 9); i++) {
+              const im = row.cells[i] && row.cells[i].querySelector("img");
+              if (im) { img = im; break; }
+            }
+          }
+        }
+        if (!img) return { ok: false, why: "找不到绿色 + 按钮" };
+        img.scrollIntoView({ block: "center" });
+        img.click();
+        return { ok: true };
       })()`)).catch(() => ({ ok: false, why: "执行失败" }));
       await sleep(4000);
       // 合成点击有时不生效：用真鼠标在 + 的坐标再点一次
@@ -559,26 +589,6 @@ if (HD > 0 || HA > 0) {
         await sleep(4000);
       }
       // 保存住宿明细
-      const r1 = await p.eval(inF(/clfbx_simple/i, `(() => {
-        const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_ZSBT_ctl\\d+_TXT_YGBH/.test(tr.innerHTML || ""));
-        let row = rows.find((tr) => ((tr.querySelector("input[id*=TXT_YGBH]") || {}).value || "").trim() === ${JSON.stringify(String(user))});
-        if (!row) {
-          row = rows[0];
-          if (!row) return { ok: false, why: "一行都没有" };
-          const put0 = (sfx, v) => { const e = row.querySelector("input[id*='" + sfx + "']"); if (!e) return false; e.value = v; return true; };
-          put0("TXT_YGBH", ${JSON.stringify(String(user))});
-          put0("TB_XM", ${JSON.stringify(String(TRAVELER))});
-          put0("TB_RS", "1");
-        }
-        const put = (sfx, v) => { const e = row.querySelector("input[id*='" + sfx + "']"); if (!e) return false; e.value = v; return true; };
-        const a = put("TB_ZSTS_D", ${JSON.stringify(String(HD))});
-        const b = put("TB_FPZS", ${JSON.stringify(String(HI))});
-        const c = put("TB_ZSJE", ${JSON.stringify(HA.toFixed(2))});
-        return { ok: a && b && c, a, b, c };
-      })()`)).catch((e) => ({ ok: false, why: e.message }));
-      say("住宿明细·填数", !!(r1 && r1.ok), (r1 && r1.why) || `${HD} 天 / ${HI} 张 / ¥${HA.toFixed(2)}`);
-
-      // 逐字段回读，确认填写完整（天数/张数/金额/城市）
       const chk = await p.eval(inF(/clfbx_simple/i, `(() => {
         const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_ZSBT_ctl\\d+_TXT_YGBH/.test(tr.innerHTML || ""));
         const row = rows.find((tr) => ((tr.querySelector("input[id*=TXT_YGBH]") || {}).value || "").trim() === ${JSON.stringify(String(user))}) || rows[0];
@@ -662,7 +672,8 @@ const NEED = air.length + carAttach.length + hotelAttach.length;
 if (NEED === 0) {
   say("票夹", true, "没有要挂的发票（全部按补助走），跳过票夹");
 } else {
-const opened = await openPicker("GV_CLF_ctl02");
+const walletRow = (await rowCtlByLabel("飞机")) || "GV_CLF_ctl02";
+  const opened = await openPicker(walletRow);
 say("打开选票面板", opened, opened ? "ok" : "失败");
 let wallet = opened ? await walletCount() : -1;
 console.log("   票夹现有:", wallet);
@@ -708,7 +719,8 @@ if (wallet >= 0 && wallet < NEED) {
     }
   }
   await closePicker();
-  await openPicker("GV_CLF_ctl02");
+  const upRow = (await rowCtlByLabel("飞机")) || "GV_CLF_ctl02";
+  await openPicker(upRow);
   wallet = await walletCount();
   console.log("   上传后票夹:", wallet);
   say("上传", wallet >= NEED, `票夹可用 ${wallet} 张`);
@@ -808,10 +820,10 @@ async function pick(rowCtl, keep, label) {
   say(label, false, "3 次都没挂上");
   return false;
 }
-// 行号实测：ctl02=飞机，ctl03=火车，ctl04=汽车（rowspan 导致按文字找行不可靠）
-const airRow = "GV_CLF_ctl02";
+// 行号优先按行名找（不同用户/不同模块行数可能不同），找不到再退回实测号
+const airRow = (await rowCtlByLabel("飞机")) || "GV_CLF_ctl02";
 if (air.length) await pick(airRow, air.map((i) => i.number), "挂机票");
-const carRow = "GV_CLF_ctl04";
+const carRow = (await rowCtlByLabel("汽车")) || "GV_CLF_ctl04";
 if (carAttach.length) await pick(carRow, carAttach.map((i) => i.number), "挂网约车");
 else say("挂网约车", true, "每天都不超 80，全部领补助，不交票");
 
