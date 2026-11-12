@@ -1,9 +1,10 @@
 ﻿// 按 dataset.json + confirm.json 自动填「国内差旅报销」单据，停在上报支付方式页之前
 // 依赖：cdp.mjs、invoices/dataset.json、invoices/confirm.json、发票 PDF 目录
 import { ensureBrowser, Browser, sleep } from "./cdp.mjs";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve, basename, join } from "node:path";
 import { readConfig } from "./config.mjs";
+import { cityTransportPlan } from "./rules.mjs";
 
 const WORK = process.env.YWTB_WORKDIR || process.cwd();
 const D = join(WORK, "finance_recon");
@@ -19,17 +20,26 @@ const cf = mustRead(join(WORK, "invoices", "confirm.json"), "确认结果 confir
 
 const air = ds.invoices.filter((i) => i.kind === "机票");
 const car = ds.invoices.filter((i) => i.kind === "网约车");
-const trips = ds.itineraries.flatMap((it) => it.trips).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+const hotelInv = ds.invoices.filter((i) => i.kind === "住宿");
+// 市内交通：每天 ≤80 领 80 元/天补助（不交票）；>80 那天交票实报。注意：包干只用于住宿
+const TP = cityTransportPlan(ds, cf.people || 1);
+const carAttach = TP.ok ? car.filter((i) => TP.attach.includes(i.number)) : car;
+// 住宿：确认页填了金额才算实报，这时才把住宿票挂到住宿行
+const hotelClaim = Number(cf.hotelAmount || 0) > 0;
+const hotelAttach = hotelClaim ? hotelInv : [];
+const trips = (ds.itineraries || []).flatMap((it) => it.trips || []).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 const dates = trips.map((t) => t.date).sort();
 const D1 = dates[0], D2 = dates[dates.length - 1];
-const AIR_TOTAL = ds.summary.air_total, CAR_TOTAL = ds.summary.car_total;
+const SUM = ds.summary || {};
+const AIR_TOTAL = SUM.air_total, CAR_TOTAL = SUM.car_total;
 const PROJECT = cf.project, REASON = cf.reason, TITLE = cf.title;
 const CITY_SEQ = [...new Set(trips.map((t) => t.city))].filter(Boolean);
 // 出差地点：去掉出发城市（行程首段所在城市），保留目的地
 const CITIES = (CITY_SEQ.length > 1 ? CITY_SEQ.slice(1) : CITY_SEQ).join("/");
-const PDFS = air.concat(car).map((i) => i.file).map((f) => join(RAW, f));
+const PDFS = air.concat(carAttach, hotelAttach).map((i) => i.file).map((f) => join(RAW, f));
 
-console.log(`单据: ${air.length} 机票 ¥${AIR_TOTAL} + ${car.length} 网约车 ¥${CAR_TOTAL}`);
+console.log(`单据: ${air.length} 机票 ¥${AIR_TOTAL} + 网约车实报 ${carAttach.length}/${car.length} 张 ¥${CAR_TOTAL}`);
+console.log(`市内交通: ${TP.ok ? TP.days.map((d) => `${d.date.slice(5)} ¥${d.amount}${d.mode === "subsidy" ? "补助" : "实报"}`).join(" / ") : TP.why}`);
 console.log(`日期: ${D1} ~ ${D2}  城市: ${CITIES}  项目: ${PROJECT}`);
 
 const log = [];
@@ -73,13 +83,22 @@ await sleep(6000);
 const CFG = readConfig();
 async function detectStaff(page) {
   if (process.env.YWTB_STAFF_NO) return { no: process.env.YWTB_STAFF_NO.trim(), name: null };
-  if (CFG.staffNo) return { no: String(CFG.staffNo).trim(), name: null };
+  if (CFG.staffNo) {
+    // 工号来自配置，姓名仍然从页面顶部读
+    const r0 = (await page.eval(`(() => {
+      const scan=(w)=>{ try { const t=(w.document.body.innerText||""); const m=t.match(/欢迎您[：:]\\s*([^\\s0-9]{2,6})/); if(m) return m[1]; } catch(e){} return null; };
+      return scan(window) || scan(window.frames["topFrame"] || {});
+    })()`).catch(() => null));
+    return { no: String(CFG.staffNo).trim(), name: r0 };
+  }
   const r = await page.eval(`(() => {
     const scan = (w) => {
       try {
         const t = (w.document.body.innerText || "");
-        const m = t.match(/欢迎您[：:]\\s*(\\S+)\\s+(\\d{4,8})/);
-        if (m) return { name: m[1], no: m[2] };
+        const m = t.match(/欢迎您[：:]\\s*([^\\s0-9]{2,6})/);
+        if (m) return { name: m[1], no: null };
+        const m2 = t.match(/欢迎您[：:]\\s*(\\S+)\\s+(\\d{4,8})/);
+        if (m2) return { name: m2[1], no: m2[2] };
       } catch (e) {}
       return null;
     };
@@ -99,13 +118,19 @@ await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "E
 await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
 await sleep(5000);
 
-// 4 项目
-await p.eval(inF(/xmjbxx/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_XMXX1"); if(b) b.click();`));
-await sleep(5000);
-await p.eval(inF(/xmjbxx/i, `const cell=[...doc.querySelectorAll("td,a,span")].find(e=>{const t=(e.innerText||"").trim(); return t && (t.includes(${JSON.stringify(PROJECT)}) || ${JSON.stringify(PROJECT)}.includes(t) && t.length>6);});
-  if(cell){ const tr=cell.closest("tr"); (tr.querySelector("a")||cell).click(); } return true;`));
-await sleep(5000);
-say("选项目", (await p.eval(inF(/xmjbxx/i, `const e=doc.getElementById("ctl00_ContentPlaceHolder1_TB_XMBH"); return e?e.value:null;`))) === PROJECT, PROJECT);
+// 4 项目：点【选择经费】→ 在弹窗里点“编号完全等于项目号”的链接（实测唯一可靠的路径）
+const projValue = () => p.eval(inF(/xmjbxx/i, `const e=doc.getElementById("ctl00_ContentPlaceHolder1_TB_XMBH"); return e?e.value:null;`));
+await p.eval(inF(/xmjbxx/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_XMXX1"); if(b) b.click(); return !!b;`));
+await sleep(6000);
+for (let attempt = 0; attempt < 3; attempt++) {
+  const clicked = await p.eval(inF(/xmjbxx/i, `const a=[...doc.querySelectorAll("a")].find(x=>(x.innerText||"").trim()===${JSON.stringify(PROJECT)});
+    if(a){ a.click(); return true; } return false;`));
+  await sleep(5500);
+  if (await projValue() === PROJECT) break;
+  if (!clicked) { await sleep(3000); }        // 弹窗还没出来，等一会再找
+}
+const projAfter = await projValue();
+say("选项目", projAfter === PROJECT, `${PROJECT}（页面显示 ${projAfter}）`);
 
 // 5 明细页
 await p.eval(inF(/xmjbxx/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_NEW_NR1"); if(b) b.click();`));
@@ -122,6 +147,79 @@ const dd = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00
   if(!el) return {ok:false}; el.disabled=false; el.value=${JSON.stringify(CITIES)};
   el.dispatchEvent(new Event("change",{bubbles:true})); return {ok:true, v:el.value};`));
 say("出差地点", dd.ok, dd.v);
+
+// 6.5 住宿明细：城市 + 天数 + 金额（确认页里用户填的）；包干与否由系统按这三项判定，脚本不代选
+const HD = Number(cf.hotelDays || 0), HA = Number(cf.hotelAmount || 0);
+if (HD > 0 || HA > 0) {
+  const CITY1 = (CITIES.split("/")[0] || "").trim();
+  const opened = await p.eval(inF(/clfbx_simple/i, `
+    const b=[...doc.querySelectorAll("input,button,a,span")]
+      .find(e=>/^\\s*住宿明细\\s*$/.test((e.value||e.innerText||"").trim()));
+    if(!b) return false; b.scrollIntoView({block:"center"}); b.click(); return true;`)).catch(() => false);
+  await sleep(4500);
+  const dlg = (await p.eval(inF(/clfbx_simple/i, `(() => {
+    const vis=e=>!!e.offsetParent;
+    const layers=[...doc.querySelectorAll("[class*=layui-layer],[class*=dialog],[class*=modal]")].filter(e=>vis(e)&&e.querySelector("table,select"));
+    const L=layers[layers.length-1];
+    if(!L) return {ok:false, why:"没有弹出住宿明细"};
+    const sels=[...L.querySelectorAll("select")].filter(vis).map(s=>({id:s.id, opts:[...s.options].map(o=>o.text.trim())}));
+    const ins=[...L.querySelectorAll("input")].filter(e=>vis(e)&&!/hidden|checkbox|radio|button|submit/.test(e.type))
+      .map(i=>({id:i.id, v:i.value}));
+    return {ok:true, sels, ins, html:L.outerHTML}; })()`)).catch(() => ({ ok: false, why: "读不到弹层" }))) || { ok: false, why: "弹层无返回" };
+
+  if (!dlg.ok) {
+    try {
+      const cands = await p.eval(inF(/clfbx_simple/i, `(() => ( [...doc.querySelectorAll("input,button,a,span,td,img")]
+        .filter(e=>/住宿/.test((e.value||e.innerText||"")+""))
+        .map(e=>{ const r=e.getBoundingClientRect(); const tr=e.closest("tr");
+          return { tag:e.tagName, id:e.id||"", txt:(e.value||e.innerText||"").trim().slice(0,20),
+                   rect:[Math.round(r.left),Math.round(r.top),Math.round(r.width),Math.round(r.height)],
+                   row: tr? (tr.innerText||"").replace(/\\s+/g," ").slice(0,40): "" }; }) ))()`));
+      mkdirSync(D, { recursive: true });
+      writeFileSync(join(D, "hotel_candidates.json"), JSON.stringify(cands, null, 1), "utf8");
+      console.log("   住宿相关候选元素已存到 finance_recon/hotel_candidates.json（", (cands||[]).length, "个）");
+    } catch {}
+    say("住宿明细", false, `${dlg.why || "打不开"}（请手动点【住宿明细】填 ${CITY1} / ${HD} 天 / ¥${HA}）`);
+  } else {
+    try { mkdirSync(D, { recursive: true }); writeFileSync(join(D, "hotel_dialog_dom.html"), dlg.html || "", "utf8"); } catch {}
+    console.log(`   住宿明细弹层：select ${dlg.sels.length} 个，输入框 ${dlg.ins.length} 个`);
+
+    let filled = { a: false, b: false };
+    if (dlg.sels.length === 1 && dlg.ins.length >= 2) {
+      const sel = dlg.sels[0];
+      filled = await p.eval(inF(/clfbx_simple/i, `
+        const set=(id,v)=>{const e=id&&doc.getElementById(id); if(!e) return false;
+          e.value=v; e.dispatchEvent(new Event("change",{bubbles:true})); e.dispatchEvent(new Event("blur",{bubbles:true})); return true;};
+        const s=doc.getElementById(${JSON.stringify(sel.id)});
+        if(s){ const o=[...s.options].find(x=>x.text.includes(${JSON.stringify(CITY1)})); if(o){ s.value=o.value; s.dispatchEvent(new Event("change",{bubbles:true})); } }
+        return { a:set(${JSON.stringify(dlg.ins[0].id)}, ${JSON.stringify(String(HD))}),
+                 b:set(${JSON.stringify(dlg.ins[1].id)}, ${JSON.stringify(HA.toFixed(2))}) };`)).catch(() => ({ a: false, b: false }));
+    }
+    await sleep(1200);
+    // 只有确实填进去了才点保存；否则关掉弹层，不要拿空表单给系统保存
+    const saved = (filled.a && filled.b) ? await p.eval(inF(/clfbx_simple/i, `(() => {
+      const vis=e=>!!e.offsetParent;
+      const L=[...doc.querySelectorAll("[class*=layui-layer],[class*=dialog],[class*=modal]")].filter(e=>vis(e)).pop();
+      if(!L) return false;
+      const btns=[...L.querySelectorAll("input,button,a,span")]
+        .filter(e=>vis(e)&&/^\\s*(保存|确定|确认|提交|新增)\\s*$/.test((e.value||e.innerText||"").trim()));
+      if(!btns.length) return false; btns[0].click(); return true; })()`)).catch(() => false) : false;
+    await sleep(5000);
+    // 关掉可能残留的弹层（没填成时也必须关，否则挡住后面的选票/行程单）
+    await p.eval(inF(/clfbx_simple/i, `[...doc.querySelectorAll(".layui-layer-close")].forEach(x=>x.click()); return true;`)).catch(() => {});
+
+    // 回读住宿费行的实报金额
+    const got = await p.eval(inF(/clfbx_simple/i, `(() => {
+      const tr=[...doc.querySelectorAll("tr")].find(t=>/^\\s*住宿费/.test(((t.cells&&t.cells[0]&&t.cells[0].innerText)||"").trim()));
+      if(!tr) return null;
+      const cells=[...tr.querySelectorAll("td")];
+      const inp=cells[cells.length-1].querySelector("input");
+      return inp?inp.value:cells[cells.length-1].innerText.trim(); })()`)).catch(() => null);
+    say("住宿明细", got != null && Math.abs(Number(got) - HA) < 0.01,
+      `填 ${CITY1} / ${HD} 天 / ¥${HA}${saved ? "" : "（未找到保存按钮）"} → 页面实报金额 ${got}`);
+    await p.screenshot(join(D, "hotel_detail.png"));
+  }
+}
 // 7 票夹：先打开选票面板，"可用发票合计"才会出现；文件框不是常驻的，要确认存在
 const pickerOpen = () => p.eval(inF(/clfbx_simple/i, `
   return !!(doc.getElementById("ctl00_ContentPlaceHolder1_BT_QR") &&
@@ -156,11 +254,14 @@ async function openUploadLayer() {
   return await hasFileInput();
 }
 
+const NEED = air.length + carAttach.length + hotelAttach.length;
+if (NEED === 0) {
+  say("票夹", true, "没有要挂的发票（全部按补助走），跳过票夹");
+} else {
 const opened = await openPicker("GV_CLF_ctl02");
 say("打开选票面板", opened, opened ? "ok" : "失败");
 let wallet = opened ? await walletCount() : -1;
 console.log("   票夹现有:", wallet);
-const NEED = air.length + car.length;
 
 if (wallet >= 0 && wallet < NEED) {
   const layer = await openUploadLayer();
@@ -216,30 +317,35 @@ if (wallet < NEED) {
   process.exit(3);
 }
 await closePicker();
+}
 
 // 8 行程单（每段一行）
-await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_GV_CLF_ctl02_BTN_XCD_Cl"); if(b) b.click();`));
-await sleep(6000);
-const segs = air.map((i) => ({
-  jt: "飞机", qs: i.travel_date || D1, js: i.travel_date || D1,
-  qd: i.from, md: i.to, pb: "经济舱", dj: String(i.total), zs: "1",
-}));
-let idx = 0;
-for (const s of segs) {
-  const ctl = "ctl" + String(idx + 2).padStart(2, "0");
-  await p.eval(inF(/clfbx_simple/i, `
-    const id=x=>"ctl00_ContentPlaceHolder1_MXCL_GV_HAVE_dj_${ctl}_"+x;
-    const sel=doc.getElementById(id("DDL_JTGJ"));
-    if(sel){ const o=[...sel.options].find(x=>x.text.trim()===${JSON.stringify(s.jt)}); if(o){ sel.value=o.value; sel.dispatchEvent(new Event("change",{bubbles:true})); } }
-    const f=(x,v)=>{const e=doc.getElementById(id(x)); if(!e) return false; e.value=v; e.dispatchEvent(new Event("change",{bubbles:true})); return true;};
-    return f("TXT_QSSJ",${JSON.stringify(s.qs)}) && f("TXT_JSSJ",${JSON.stringify(s.js)}) &&
-           f("TXT_QSDD",${JSON.stringify(s.qd)}) && f("TXT_JSDD",${JSON.stringify(s.md)}) &&
-           f("TXT_PB",${JSON.stringify(s.pb)}) && f("TXT_DJ",${JSON.stringify(s.dj)}) && f("TXT_ZS","1");`));
-  idx++;
+if (air.length) {
+  await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_GV_CLF_ctl02_BTN_XCD_Cl"); if(b) b.click();`));
+  await sleep(6000);
+  const segs = air.map((i) => ({
+    jt: "飞机", qs: i.travel_date || D1, js: i.travel_date || D1,
+    qd: i.from, md: i.to, pb: "经济舱", dj: String(i.total), zs: "1",
+  }));
+  let idx = 0;
+  for (const s of segs) {
+    const ctl = "ctl" + String(idx + 2).padStart(2, "0");
+    await p.eval(inF(/clfbx_simple/i, `
+      const id=x=>"ctl00_ContentPlaceHolder1_MXCL_GV_HAVE_dj_${ctl}_"+x;
+      const sel=doc.getElementById(id("DDL_JTGJ"));
+      if(sel){ const o=[...sel.options].find(x=>x.text.trim()===${JSON.stringify(s.jt)}); if(o){ sel.value=o.value; sel.dispatchEvent(new Event("change",{bubbles:true})); } }
+      const f=(x,v)=>{const e=doc.getElementById(id(x)); if(!e) return false; e.value=v; e.dispatchEvent(new Event("change",{bubbles:true})); return true;};
+      return f("TXT_QSSJ",${JSON.stringify(s.qs)}) && f("TXT_JSSJ",${JSON.stringify(s.js)}) &&
+             f("TXT_QSDD",${JSON.stringify(s.qd)}) && f("TXT_JSDD",${JSON.stringify(s.md)}) &&
+             f("TXT_PB",${JSON.stringify(s.pb)}) && f("TXT_DJ",${JSON.stringify(s.dj)}) && f("TXT_ZS","1");`));
+    idx++;
+  }
+  await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_MXCL_BTN_CLOSE"); if(b) b.click();`));
+  await sleep(8000);
+  say("行程单", true, `${segs.length} 段`);
+} else {
+  say("行程单", true, "没有机票，跳过");
 }
-await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_MXCL_BTN_CLOSE"); if(b) b.click();`));
-await sleep(8000);
-say("行程单", true, `${segs.length} 段`);
 
 // 9 挂票
 async function pick(rowCtl, keep, label) {
@@ -262,12 +368,12 @@ async function pick(rowCtl, keep, label) {
     return {zs:g("${rowCtl}_TXT_DZFPZS"), je:g("${rowCtl}_TXT_DZFPJE")};`));
   say(label, String(v.zs) === String(keep.length), JSON.stringify(v));
 }
-await pick("GV_CLF_ctl02", air.map((i) => i.number), "挂机票");
-await pick("GV_CLF_ctl04", car.map((i) => i.number), "挂网约车");
+if (air.length) await pick("GV_CLF_ctl02", air.map((i) => i.number), "挂机票");
+if (carAttach.length) await pick("GV_CLF_ctl04", carAttach.map((i) => i.number), "挂网约车");
+else say("挂网约车", true, "每天都不超 80，全部领补助，不交票");
 
-// 9.5 住宿：按「有票就走实报（不包干）」的规则处理
-const hotel = ds.invoices.filter((i) => i.kind === "住宿");
-if (hotel.length) {
+// 9.5 住宿：把住宿票挂到住宿行（天数/金额已在「住宿明细」里按确认页填过）
+if (hotelAttach.length) {
   const rowCtl = await p.eval(inF(/clfbx_simple/i, `
     const btn = [...doc.querySelectorAll("input[id*='BTN_XZFP']")].find((b) => {
       const tr = b.closest("tr"); return tr && /住宿/.test(tr.innerText || "");
@@ -275,25 +381,48 @@ if (hotel.length) {
     if (!btn) return null;
     const m = (btn.id || "").match(/(GV_CLF_ctl\\d+)/);
     return m ? m[1] : null;`));
-  const nights = hotel.reduce((s, i) => s + (i.nights || i.qty || 0), 0);
+  const nights = hotelInv.reduce((s, i) => s + (i.nights || i.qty || 0), 0);
   if (rowCtl) {
-    await pick(rowCtl, hotel.map((i) => i.number), "挂住宿票");
-    // 有「天数」输入框就填上住宿晚数
-    const got = await p.eval(inF(/clfbx_simple/i, `
-      const btn = doc.getElementById("ctl00_ContentPlaceHolder1_${rowCtl}_BTN_XZFP");
-      const row = btn && btn.closest("tr");
-      if (!row) return "no row";
-      const el = [...row.querySelectorAll("input")].find((e) => /天|TS|TSL|ZS/.test(e.id || ""));
-      if (!el) return "no days field";
-      el.value = ${JSON.stringify(String(nights))};
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      return el.id;`));
-    say("住宿", true, `${hotel.length} 张票 / ${nights} 晚（天数框: ${got}）`);
+    await pick(rowCtl, hotelInv.map((i) => i.number), "挂住宿票");
+    say("住宿", true, `${hotelInv.length} 张票 / 票面 ${nights} 晚（天数金额以住宿明细为准）`);
   } else {
     say("住宿", false, "有住宿发票但没找到「住宿」行，需人工确认");
   }
+} else if (hotelInv.length) {
+  say("住宿", true, "确认页住宿金额为 0，住宿票不挂");
 } else {
-  say("住宿", true, "无住宿发票 → 按包干处理");
+  say("住宿", true, "无住宿发票");
+}
+
+// 9.7 市内交通补助：领补助的天数 × 80 × 人数（实报的天已交票，不再领当天补助）
+if (TP.ok && TP.subsidyDays > 0) {
+  const fill = await p.eval(inF(/clfbx_simple/i, `(() => {
+    const tr=[...doc.querySelectorAll("tr")].find(t=>((t.cells&&t.cells[1]&&t.cells[1].innerText)||"").trim().includes("市内交通补助"));
+    if(!tr) return {ok:false, why:"找不到市内交通补助行"};
+    const ins=[...tr.querySelectorAll("input")].filter(e=>!/hidden|checkbox|radio|button|submit/.test(e.type));
+    if(ins.length<2) return {ok:false, why:"行内输入框不足"};
+    const set=(e,v)=>{e.value=v; e.dispatchEvent(new Event("change",{bubbles:true})); e.dispatchEvent(new Event("blur",{bubbles:true}));};
+    set(ins[0], ${JSON.stringify(String(TP.persons))});
+    set(ins[1], ${JSON.stringify(String(TP.subsidyDays))});
+    return {ok:true, ids:ins.map(e=>e.id)}; })()`)).catch(() => ({ ok: false, why: "脚本异常" }));
+  await sleep(3000);
+  const got = await p.eval(inF(/clfbx_simple/i, `(() => {
+    const tr=[...doc.querySelectorAll("tr")].find(t=>((t.cells&&t.cells[1]&&t.cells[1].innerText)||"").trim().includes("市内交通补助"));
+    if(!tr) return null;
+    const ins=[...tr.querySelectorAll("input")].filter(e=>!/hidden|checkbox|radio|button|submit/.test(e.type));
+    const cells=[...tr.querySelectorAll("td")];
+    const inp=cells[cells.length-1].querySelector("input");
+    return { rs: ins[0] ? ins[0].value : null, ts: ins[1] ? ins[1].value : null,
+             amt: inp ? inp.value : cells[cells.length-1].innerText.trim() }; })()`)).catch(() => null);
+  const ok = !!fill.ok && got != null
+    && Math.abs(Number(got.amt) - TP.subsidyAmount) < 0.01
+    && String(got.rs) === String(TP.persons)
+    && String(got.ts) === String(TP.subsidyDays);
+  say("市内交通补助", ok,
+    `${TP.subsidyDays} 天 × ¥80 × ${TP.persons} 人 = ¥${TP.subsidyAmount}；页面 人数=${got && got.rs} 天数=${got && got.ts} 实报=${got && got.amt}${fill.ok ? "" : "（" + fill.why + "）"}`);
+  await p.screenshot(join(D, "city_transport.png"));
+} else if (TP.ok) {
+  say("市内交通补助", true, "每天网约车都超 80，全部交票实报，补助填 0");
 }
 
 // 10 保存（只一次）

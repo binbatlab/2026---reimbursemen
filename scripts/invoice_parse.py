@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """发票解析 + 一致性校验：把 PDF 文本变成结构化数据，并在填单前先自证一遍。
 用法: python _tools/invoice_parse.py
 输入: invoices/raw/texts.json
@@ -66,7 +66,7 @@ def parse_invoice(name, text):
             r = re.search(r"([\u4e00-\u9fa5]{2,6})[-—]([\u4e00-\u9fa5]{2,6})\s+([A-Z]{2}\d{3,4})", note.group(1))
             if r:
                 inv["from"], inv["to"], inv["flight"] = r.group(1), r.group(2), r.group(3)
-    elif re.search(r"住宿服务|住宿费|酒店|宾馆|旅馆|民宿|旅店", text):
+    elif ("*住宿服务*" in text) or ("住宿服务" in text) or ("住宿费" in text) or re.search(r"酒店|宾馆|旅馆|民宿|旅店", inv.get("seller") or ""):
         inv["kind"] = "住宿"
         # 天数：优先票面写的「X晚 / X间夜 / 共X天」，否则由出发/返回日期推算
         n = re.search(r"(\d+)\s*(?:晚|间夜)", text) or re.search(r"共\s*(\d+)\s*天", text)
