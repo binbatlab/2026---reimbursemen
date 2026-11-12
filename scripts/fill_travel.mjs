@@ -1,4 +1,4 @@
-// 按 dataset.json + confirm.json 自动填「国内差旅报销」单据，停在上报支付方式页之前
+﻿// 按 dataset.json + confirm.json 自动填「国内差旅报销」单据，停在上报支付方式页之前
 // 依赖：cdp.mjs、invoices/dataset.json、invoices/confirm.json、发票 PDF 目录
 import { ensureBrowser, Browser, sleep } from "./cdp.mjs";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -219,6 +219,81 @@ if (HD > 0 || HA > 0) {
       `填 ${CITY1} / ${HD} 天 / ¥${HA}${saved ? "" : "（未找到保存按钮）"} → 页面实报金额 ${got}`);
     await p.screenshot(join(D, "hotel_detail.png"));
   }
+}
+// 6.6 住宿明细（真实控件 NHZSBT_*）：淡季天数 / 发票张数 / 住宿金额 + 住宿地点
+if (HD > 0 || HA > 0) {
+  const HI = Number(cf.hotelInvoices || (cf.hotelMode === "invoice" ? 1 : 0));
+  const CITY = String(cf.hotelCity || CITY1 || "").trim();
+  const PROV_MAP = { 苏州:"JS", 南京:"JS", 无锡:"JS", 常州:"JS", 镇江:"JS", 徐州:"JS", 扬州:"JS",
+    上海:"SH", 北京:"BJ", 天津:"TJ", 重庆:"CQ", 广州:"GD", 深圳:"GD", 珠海:"GD", 东莞:"GD",
+    杭州:"ZJ", 宁波:"ZJ", 西安:"SN", 成都:"SC", 武汉:"HB", 长沙:"HN", 合肥:"AH", 济南:"SD",
+    青岛:"SD", 郑州:"HA", 福州:"FJ", 厦门:"FJ", 南昌:"JX", 太原:"SX", 石家庄:"HE", 沈阳:"LN" };
+  const PROV = String(cf.hotelProvince || PROV_MAP[CITY] || CITY || "").trim();
+  await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_ZSFMX"); if(b){b.scrollIntoView({block:"center"}); b.click();} return !!b;`));
+  await sleep(6000);
+
+  const res = await p.eval(inF(/clfbx_simple/i, `(() => {
+    const pickRow = () => [...doc.querySelectorAll("tr")].find((tr) => {
+      const i = tr.querySelector("input[id*=TXT_YGBH]"); return i && (i.value || "").trim() === ${JSON.stringify(user)};
+    });
+    let row = pickRow();
+    if (!row) return { ok: false, why: "没找到本人所在行" };
+    const set = (suffix, v) => {
+      const e = row.querySelector("input[id*='" + suffix + "']");
+      if (!e) return false;
+      e.value = v; e.dispatchEvent(new Event("change", { bubbles: true })); return true;
+    };
+    const a = set("TB_ZSTS_D", ${JSON.stringify(String(HD))});
+    const b = set("TB_FPZS", ${JSON.stringify(String(HI))});
+    const c = set("TB_ZSJE", ${JSON.stringify(HA.toFixed(2))});
+    return { ok: a && b && c, a, b, c };
+  })()`)).catch((e) => ({ ok: false, why: e.message }));
+  say("住宿明细·填数", res.ok, res.why || `淡季 ${HD} 天 / 发票 ${HI} 张 / 金额 ${HA.toFixed(2)}`);
+
+  // 住宿地点为空时，用【出差地区检索】选城市
+  if (res.ok) {
+    const need = await p.eval(inF(/clfbx_simple/i, `(() => {
+      const row = [...doc.querySelectorAll("tr")].find((tr) => {
+        const i = tr.querySelector("input[id*=TXT_YGBH]"); return i && (i.value || "").trim() === ${JSON.stringify(user)};
+      });
+      if (!row) return "no row";
+      const img = row.querySelector("img[id*=Img_ZSDD]");
+      if (!img) return "no btn";
+      img.click(); return "opened";
+    })()`)).catch(() => "err");
+    await sleep(4000);
+    if (need === "opened") {
+      const prov = await p.eval(inF(/clfbx_simple/i, `(() => {
+        const e = doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_TB_PRO");
+        if (!e) return "no prov input";
+        e.value = ${JSON.stringify(PROV)};
+        const b = doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_BT_DQJS");
+        if (b) b.click();
+        return "searched";
+      })()`)).catch(() => "err");
+      await sleep(5000);
+      const picked = await p.eval(inF(/clfbx_simple/i, `(() => {
+        const want = ${JSON.stringify(CITY)};
+        const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_DQJS_ctl\\d+_Chk_Is/.test(tr.innerHTML || ""));
+        const hit = rows.find((tr) => (tr.innerText || "").includes(want));
+        if (!hit) return { ok: false, why: "检索结果里没有 " + want, count: rows.length };
+        const cb = hit.querySelector("input[type=checkbox]");
+        if (cb && !cb.checked) cb.click();
+        const place = hit.querySelector("input[type=text]");
+        if (place) { place.value = want; place.dispatchEvent(new Event("change", { bubbles: true })); }
+        const save = doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_BT_BCDQ2");
+        if (save) save.click();
+        return { ok: !!(cb), count: rows.length };
+      })()`)).catch((e) => ({ ok: false, why: e.message }));
+      say("住宿明细·地点", picked.ok, picked.why || `已选 ${CITY}`);
+      await sleep(4000);
+    }
+  }
+
+  // 保存住宿明细
+  await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_BTN_CLOSE"); if(b) b.click(); return !!b;`)).catch(() => false);
+  await sleep(5000);
+  say("住宿明细·保存", true, "已点【保存并返回上一页】");
 }
 // 7 票夹：先打开选票面板，"可用发票合计"才会出现；文件框不是常驻的，要确认存在
 const pickerOpen = () => p.eval(inF(/clfbx_simple/i, `
