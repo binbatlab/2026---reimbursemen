@@ -1,4 +1,4 @@
-﻿// —— 浏览器守卫：连接断了给出明确提示，而不是半路 mysteriously 停住 ——
+// —— 浏览器守卫：连接断了给出明确提示，而不是半路 mysteriously 停住 ——
 process.on("unhandledRejection", (e) => {
   const msg = String((e && e.message) || e);
   if (/Target closed|Session closed|websocket|ECONNREFUSED|WebSocket/i.test(msg)) {
@@ -510,47 +510,6 @@ if (HD > 0 || HA > 0) {
 
     if (opened) {
       // 填本人那一行
-      const r1 = await p.eval(inF(/clfbx_simple/i, `(() => {
-        const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_ZSBT_ctl\\d+_TXT_YGBH/.test(tr.innerHTML || ""));
-        let row = rows.find((tr) => ((tr.querySelector("input[id*=TXT_YGBH]") || {}).value || "").trim() === ${JSON.stringify(String(user))});
-        if (!row) {
-          row = rows[0];
-          if (!row) return { ok: false, why: "一行都没有" };
-          const put0 = (sfx, v) => { const e = row.querySelector("input[id*='" + sfx + "']"); if (!e) return false; e.value = v; return true; };
-          put0("TXT_YGBH", ${JSON.stringify(String(user))});
-          put0("TB_XM", ${JSON.stringify(String(TRAVELER))});
-          put0("TB_RS", "1");
-        }
-        const put = (sfx, v) => { const e = row.querySelector("input[id*='" + sfx + "']"); if (!e) return false; e.value = v; return true; };
-        const a = put("TB_ZSTS_D", ${JSON.stringify(String(HD))});
-        const b = put("TB_FPZS", ${JSON.stringify(String(HI))});
-        const c = put("TB_ZSJE", ${JSON.stringify(HA.toFixed(2))});
-        return { ok: a && b && c, a, b, c };
-      })()`)).catch((e) => ({ ok: false, why: e.message }));
-      say("住宿明细·填数", !!(r1 && r1.ok), (r1 && r1.why) || `${HD} 天 / ${HI} 张 / ¥${HA.toFixed(2)}`);
-
-      // 逐字段回读，确认填写完整（天数/张数/金额/城市）
-      const chk = await p.eval(inF(/clfbx_simple/i, `(() => {
-        const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_ZSBT_ctl\\d+_TXT_YGBH/.test(tr.innerHTML || ""));
-        const row = rows.find((tr) => ((tr.querySelector("input[id*=TXT_YGBH]") || {}).value || "").trim() === ${JSON.stringify(String(user))}) || rows[0];
-        if (!row) return { ok: false, why: "找不到行" };
-        const g = (sfx) => { const e = row.querySelector("input[id*='" + sfx + "']"); return e ? e.value : ""; };
-        const place = (row.innerText || "").replace(/\\s+/g, " ").trim();
-        return { ok: true, d: g("TB_ZSTS_D"), f: g("TB_FPZS"), j: g("TB_ZSJE"),
-                 zg: g("TXT_YGBH"), xm: g("TB_XM"), place };
-      })()`)).catch(() => null);
-      if (chk && chk.ok) {
-        const miss = [];
-        if (!chk.zg) miss.push("工号");
-        if (!chk.xm) miss.push("姓名");
-        if (String(chk.d) === "") miss.push("淡季天数");
-        if (String(chk.f) === "") miss.push("发票张数");
-        if (String(chk.j) === "" || Number(chk.j) === 0) miss.push("住宿金额");
-        say("住宿明细·完整性", miss.length === 0,
-            miss.length ? `缺：${miss.join("、")}（行内容：${chk.place.slice(0, 40)}）` : `工号 ${chk.zg} / ${chk.d} 天 / ${chk.f} 张 / ¥${chk.j}`);
-      }
-
-      // 住宿地点
       const openedDlg = await p.eval(inF(/clfbx_simple/i, `(() => {
         // 绿色 + 在文档里直接找（不一定在当前 tr 内）
         const imgs = [...doc.querySelectorAll("img[id*=Img_ZSDD],input[id*=Img_ZSDD]")];
@@ -600,6 +559,47 @@ if (HD > 0 || HA > 0) {
         await sleep(4000);
       }
       // 保存住宿明细
+      const r1 = await p.eval(inF(/clfbx_simple/i, `(() => {
+        const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_ZSBT_ctl\\d+_TXT_YGBH/.test(tr.innerHTML || ""));
+        let row = rows.find((tr) => ((tr.querySelector("input[id*=TXT_YGBH]") || {}).value || "").trim() === ${JSON.stringify(String(user))});
+        if (!row) {
+          row = rows[0];
+          if (!row) return { ok: false, why: "一行都没有" };
+          const put0 = (sfx, v) => { const e = row.querySelector("input[id*='" + sfx + "']"); if (!e) return false; e.value = v; return true; };
+          put0("TXT_YGBH", ${JSON.stringify(String(user))});
+          put0("TB_XM", ${JSON.stringify(String(TRAVELER))});
+          put0("TB_RS", "1");
+        }
+        const put = (sfx, v) => { const e = row.querySelector("input[id*='" + sfx + "']"); if (!e) return false; e.value = v; return true; };
+        const a = put("TB_ZSTS_D", ${JSON.stringify(String(HD))});
+        const b = put("TB_FPZS", ${JSON.stringify(String(HI))});
+        const c = put("TB_ZSJE", ${JSON.stringify(HA.toFixed(2))});
+        return { ok: a && b && c, a, b, c };
+      })()`)).catch((e) => ({ ok: false, why: e.message }));
+      say("住宿明细·填数", !!(r1 && r1.ok), (r1 && r1.why) || `${HD} 天 / ${HI} 张 / ¥${HA.toFixed(2)}`);
+
+      // 逐字段回读，确认填写完整（天数/张数/金额/城市）
+      const chk = await p.eval(inF(/clfbx_simple/i, `(() => {
+        const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_ZSBT_ctl\\d+_TXT_YGBH/.test(tr.innerHTML || ""));
+        const row = rows.find((tr) => ((tr.querySelector("input[id*=TXT_YGBH]") || {}).value || "").trim() === ${JSON.stringify(String(user))}) || rows[0];
+        if (!row) return { ok: false, why: "找不到行" };
+        const g = (sfx) => { const e = row.querySelector("input[id*='" + sfx + "']"); return e ? e.value : ""; };
+        const place = (row.innerText || "").replace(/\\s+/g, " ").trim();
+        return { ok: true, d: g("TB_ZSTS_D"), f: g("TB_FPZS"), j: g("TB_ZSJE"),
+                 zg: g("TXT_YGBH"), xm: g("TB_XM"), place };
+      })()`)).catch(() => null);
+      if (chk && chk.ok) {
+        const miss = [];
+        if (!chk.zg) miss.push("工号");
+        if (!chk.xm) miss.push("姓名");
+        if (String(chk.d) === "") miss.push("淡季天数");
+        if (String(chk.f) === "") miss.push("发票张数");
+        if (String(chk.j) === "" || Number(chk.j) === 0) miss.push("住宿金额");
+        say("住宿明细·完整性", miss.length === 0,
+            miss.length ? `缺：${miss.join("、")}（行内容：${chk.place.slice(0, 40)}）` : `工号 ${chk.zg} / ${chk.d} 天 / ${chk.f} 张 / ¥${chk.j}`);
+      }
+
+      // 住宿地点
       await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_BTN_CLOSE"); if(b){b.click(); return true;} return false;`)).catch(() => false);
       await sleep(6000);
       filledNow = await hotelFilled();
