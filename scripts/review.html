@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
@@ -97,6 +97,13 @@
         <label>住宿天数（晚）<input type="number" id="hotelDays" min="0" step="1" placeholder="如 1"></label>
         <label>住宿金额（元）<input type="number" id="hotelAmount" min="0" step="0.01" placeholder="票面价税合计 / 包干按标准"></label>
       </div>
+      <div class="row2">
+        <label>住宿城市<input type="text" id="hotelCity" placeholder="如 苏州"></label>
+        <label>住宿发票张数<input type="number" id="hotelInvoices" min="0" step="1" placeholder="包干填 0"></label>
+      </div>
+      <div class="row2">
+        <label>出差人姓名<input type="text" id="travelerName" placeholder="报销单上的出差人"></label>
+      </div>
       <div class="hint">规则：<b>项目号 2 开头 → 必须不包干</b>（脚本锁定，不能选包干）；<b>9 开头 → 包干、不包干都可以</b>。不住就把天数、金额都填 0。城市取自出差地点。</div>
     </div>
 
@@ -191,6 +198,9 @@ f.addEventListener('submit', async (e) => {
     hotelInvoices,
     hotelDays,
     hotelAmount,
+    hotelCity: (document.getElementById('hotelCity').value || '').trim(),
+    hotelInvoices: Number(document.getElementById('hotelInvoices').value || 0),
+    name: (document.getElementById('travelerName').value || '').trim(),
     people,
     car: f.querySelector('input[name=car]:checked').value,
     remark: document.getElementById('remark').value.trim(),

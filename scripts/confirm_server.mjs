@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+﻿import { createServer } from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -68,6 +68,9 @@ function lastValues() {
     hotelDays,
     hotelAmount,
     hotelInfo: hotel,
+    hotelCity: (last && last.hotelCity) || (ds && (ds.invoices || []).filter((i) => i.kind === "住宿").map((i) => i.city || "").filter(Boolean)[0]) || "",
+    hotelInvoices: (last && Number(last.hotelInvoices)) || (hotel.count > 0 ? 1 : 0),
+    name: (last && last.name) || "",
     people,
     transport,
     car: (last && last.car) || d.car || "qiche",
@@ -103,6 +106,7 @@ const FILL_JS = `
     pin.parentNode.replaceChild(sel, pin);
   }
   setVal('hotelDays', d.hotelDays); setVal('hotelAmount', d.hotelAmount); setVal('people', d.people);
+  setVal('hotelCity', d.hotelCity); setVal('hotelInvoices', d.hotelInvoices); setVal('travelerName', d.name);
   // 住宿模式：2 开头强制不包干；9 开头用户可选
   function applyHotelRule() {
     var pv = (document.getElementById('project') || {}).value || '';
