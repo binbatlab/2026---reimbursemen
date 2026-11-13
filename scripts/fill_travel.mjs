@@ -1351,10 +1351,27 @@ if (cf.spbz) {
   } catch {}
 }
 
+// 14 附件：发票以外的文件（行程单/通知书等）→ 交给 upload_attachments.mjs 上传并核对
+//   幂等：已在单据里的跳过；只塞一批、只核对条数，多传/漏传都会报错退出；永不点确认提交
+if (process.env.YWTB_SKIP_ATTACH !== "1") {
+  console.log("\n▶ 上传附件（发票以外的文件）…");
+  try {
+    const { spawnSync } = await import("node:child_process");
+    const r = spawnSync(process.execPath, [join(import.meta.dirname, "upload_attachments.mjs"), "--dir", RAW], {
+      cwd: WORK,
+      stdio: "inherit",
+      env: { ...process.env, YWTB_WORKDIR: WORK, YWTB_PROFILE: PROFILE },
+    });
+    say("附件上传", r.status === 0, r.status === 0 ? "核对通过：无缺、无重复" : `返回 ${r.status}（看上面输出，脚本不会提交）`);
+  } catch (e) {
+    say("附件上传", false, String(e.message).slice(0, 60));
+  }
+}
+
 await p.bringToFront();
-await p.banner("🏁 已到审批单阶段 — 请在审批单页核对附件与担保人，最后自己点【确认提交审批】", { color: "#059669", pulse: false });
+await p.banner("🏁 已到审批单阶段 — 请核对金额/附件/担保人，最后自己点【确认提交审批】", { color: "#059669", pulse: false });
 process.stdout.write("\x07");
-console.log("\n下一步：审批单页 → 上传附件 → 编辑流程加担保人 → 你自己点【确认提交审批】。");
+console.log("\n下一步：审批单页核对金额、附件、担保人 → 你自己点【确认提交审批】。");
 
 console.log("\n=== 汇总 ===");
 for (const [o, k, m] of log) console.log(`${o ? "✅" : "❌"} ${k}: ${m}`);
