@@ -1,4 +1,4 @@
-﻿import { createServer } from "node:http";
+import { createServer } from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -40,13 +40,13 @@ function lastValues() {
     };
   }
 
-  // 住宿天数/金额：由用户按实际填，这里只负责带出（上次的 > 发票检测值 > 空）
+  // 住宿天数：按实际填；住宿金额不再问用户 —— 包干时系统按「标准 × 天数」算，
+  // 不包干时用住宿票面合计（服务端在 /submit 里补进 hotelAmount）
   const num = (v) => (v == null || v === "" || !Number.isFinite(Number(v)) ? 0 : Number(v));
   const lastDays = last ? num(last.hotelDays) : 0;
-  const lastAmount = last ? num(last.hotelAmount) : 0;
   const hotelDays = lastDays > 0 ? String(lastDays) : (hotel.nights > 0 ? String(hotel.nights) : "");
-  const hotelAmount = lastAmount > 0 ? lastAmount.toFixed(2) : (Number(hotel.total) > 0 ? hotel.total : "");
-  let hotelMode = (last && last.hotelMode) || (num(hotelAmount) > 0 ? "invoice" : (num(hotelDays) > 0 ? "baogan" : "none"));
+  let hotelMode = (last && last.hotelMode) ||
+    (hotel.count > 0 ? "invoice" : (num(hotelDays) > 0 ? "baogan" : "none"));
   const projectForRule = String((last && last.project) || d.project || "").trim();
   if (/^2/.test(projectForRule)) hotelMode = "invoice";   // 2 开头：必须不包干
 
@@ -66,7 +66,6 @@ function lastValues() {
     hotel: hotelMode,
     hotelMode,
     hotelDays,
-    hotelAmount,
     hotelInfo: hotel,
     dateFrom: (last && last.dateFrom) || (ds && (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.date)).filter(Boolean).sort()[0]) || "",
     dateTo: (last && last.dateTo) || (ds && (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.date)).filter(Boolean).sort().slice(-1)[0]) || "",
@@ -116,7 +115,7 @@ const FILL_JS = `
     if (d.project) sel.value = d.project;
     pin.parentNode.replaceChild(sel, pin);
   }
-  setVal('hotelDays', d.hotelDays); setVal('hotelAmount', d.hotelAmount); setVal('people', d.people);
+  setVal('hotelDays', d.hotelDays); setVal('people', d.people);
   setVal('hotelCity', d.hotelCity); setVal('hotelInvoices', d.hotelInvoices);
   setVal('spbz', d.spbz);
   setVal('dateFrom', d.dateFrom); setVal('dateTo', d.dateTo); setVal('cities', d.cities);
@@ -152,7 +151,7 @@ const FILL_JS = `
       hi.innerHTML = '检测到 <b>' + h.count + '</b> 张住宿发票，共 <b>' + h.nights + '</b> 晚，合计 <b>¥' + h.total +
         '</b> —— 已带出，按实际核对修改';
     } else {
-      hi.innerHTML = '未检测到住宿发票 —— 按实际住宿填天数和金额；不住都填 0';
+      hi.innerHTML = '未检测到住宿发票 —— 只填天数和城市，金额系统按标准自动算；不住就填 0';
     }
   }
   // 市内交通补助：每天 ≤80 领 80 元/天补助（不交票）；>80 该天交票实报
@@ -247,15 +246,25 @@ const server = createServer((req, res) => {
     req.on("end", () => {
       try {
         const data = JSON.parse(body);
-        // 住宿天数/金额规范化；hotel 只做兼容标记，包干与否由系统按城市/天数/金额判定
+        // 住宿天数规范化；住宿金额不再由用户填：
+        //   包干 → 0（系统按「标准 × 天数」自动算）
+        //   不包干 → 住宿票面合计（从 dataset.json 取，用户看不到也不用填）
         const hd = Number(data.hotelDays) || 0;
-        const ha = Number(data.hotelAmount) || 0;
-        data.hotelDays = hd > 0 ? hd : 0;
-        data.hotelAmount = ha > 0 ? Number(ha.toFixed(2)) : 0;
         // 尊重前端选的包干/不包干；2 开头项目强制不包干
         const forced = /^2/.test(String(data.project || "").trim());
-        data.hotelMode = forced ? "invoice" : (data.hotelMode || (data.hotelAmount > 0 ? "invoice" : "baogan"));
-        data.hotel = data.hotelDays > 0 ? data.hotelMode : "none";
+        data.hotelDays = hd > 0 ? hd : 0;
+        data.hotelMode = forced ? "invoice" : (data.hotelMode || "baogan");
+        if (data.hotelDays <= 0) data.hotelMode = "none";
+        let hotelTotal = 0;
+        try {
+          const ds = JSON.parse(readFileSync(resolve(ROOT, "invoices", "dataset.json"), "utf8"));
+          hotelTotal = (ds.invoices || []).filter((i) => i.kind === "住宿")
+            .reduce((s, i) => s + Number(i.total || 0), 0);
+        } catch { /* 没有解析结果就按 0 */ }
+        data.hotelAmount = data.hotelMode === "invoice"
+          ? Number((hotelTotal || Number(data.hotelAmount) || 0).toFixed(2))
+          : 0;
+        data.hotel = data.hotelMode;
         data.hotelInvoices = data.hotelMode === "invoice" && data.hotelDays > 0 ? Number(data.hotelInvoices || 1) : 0;
         data.people = Math.max(1, Math.floor(Number(data.people) || 1));
         data._submittedAt = new Date().toISOString();

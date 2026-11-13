@@ -1,4 +1,4 @@
-// 审批单附件上传：只传「非发票」附件，一次一批、传前算差集、传后核对，杜绝多传/少传/误传。
+﻿// 审批单附件上传：只传「非发票」附件，一次一批、传前算差集、传后核对，杜绝多传/少传/误传。
 //
 // 用法：
 //   launch.ps1 -Script scripts\upload_attachments.mjs -ScriptArgs "--dir","<发票所在文件夹>"
@@ -23,22 +23,10 @@ const FILES = arg("files");
 const DRY = has("dry-run");
 const FIX_DUPES = has("fix-dupes");
 
-const INVOICE_RE = /发票|机票|火车票|网约车|滴滴|出租|客运/;
+const INVOICE_RE = /发票|机票|火车票|行程单|网约车|滴滴|出租|客运/;
 // 名字里带这些词的一律按附件处理，避免"发票查验单/发票通知书"被误判成发票而漏传
 const ATTACH_HINT_RE = /通知书|受理|授权|清单|合同|协议|明细|凭证|函/;
-
-// 发票清单以 dataset.json 为准：解析成发票的才算发票，
-// 行程单、通知书这类没被解析成发票的文件一律走附件（名字里带"行程单"也不行）
-let INVOICE_NAMES = null;
-try {
-  const dsPath0 = join(process.env.YWTB_WORKDIR || process.cwd(), "invoices", "dataset.json");
-  const ds0 = JSON.parse(readFileSync(dsPath0, "utf8").replace(/^\uFEFF/, ""));
-  if (Array.isArray(ds0.invoices) && ds0.invoices.length) {
-    INVOICE_NAMES = new Set(ds0.invoices.map((i) => basename(i.file || "")).filter(Boolean));
-  }
-} catch { /* 没有解析结果就退回按名字判断 */ }
-const isInvoice = (name) =>
-  INVOICE_NAMES ? INVOICE_NAMES.has(basename(name)) : (INVOICE_RE.test(name) && !ATTACH_HINT_RE.test(name));
+const isInvoice = (name) => INVOICE_RE.test(name) && !ATTACH_HINT_RE.test(name);
 
 function collect() {
   if (FILES) return FILES.split(",").map((s) => s.trim()).filter(Boolean);
@@ -47,37 +35,30 @@ function collect() {
 }
 
 function token(name) {
-  const s = name.replace(/\.(pdf|ofd)$/i, "").replace(/[\s\-_]/g, "").replace(/（/g, "(").replace(/）/g, ")");
-  // 系统会在文件名尾部追加随机数字（>=5 位），去掉它才能和本地文件名对上；
-  // 括号里的序号 (1)(2) 必须保留，否则 4 份行程单会被当成同一份
-  const t = s.replace(/\d{5,}$/g, "");
-  return t || s.slice(0, 12);
+  const s = name.replace(/\.(pdf|ofd)$/i, "").replace(/\d+/g, "").replace(/[\s\-_（）()]/g, "");
+  const cn = s.match(/[\u4e00-\u9fa5]+/);
+  if (cn && cn[0].length >= 2) return cn[0].slice(0, 4);
+  return s.slice(0, 12);
 }
-const normName = (s) => String(s || "").replace(/\s+/g, "").replace(/（/g, "(").replace(/）/g, ")");
 
 const ver = await ensureBrowser({ profileDir: process.env.YWTB_PROFILE });
 const browser = await new Browser(ver.webSocketDebuggerUrl).connect();
 const page = await browser.attachExisting((t) => /shenpi\/SP_Rcbx_Sp/i.test(t.url || ""));
-// attachExisting 在没有匹配页时会退回第一个页面 —— 必须自己确认真的站在审批单上
-const pageUrl = page ? String(await page.eval(`location.href`).catch(() => "")) : "";
-if (!page || !/shenpi\/SP_Rcbx_Sp/i.test(pageUrl)) {
-  console.error("没找到审批单页面（SP_Rcbx_Sp.aspx）。请先完成【提交线上审批】，让审批单标签页打开后再传附件。");
-  process.exit(2);
-}
+if (!page) { console.error("没找到审批单页面（SP_Rcbx_Sp.aspx）"); process.exit(2); }
 await page.send("Page.enable");
 await page.send("DOM.enable");
 browser.on((m) => { if (m.method === "Page.javascriptDialogOpening") page.send("Page.handleJavaScriptDialog", { accept: true }).catch(() => {}); });
 
-// 已提交到单据的「附件」：只有带删除链接（LINK_DEL）的行才是真附件，
-// 系统自动绑定的发票行没有删除链接 —— 这样既不会把发票算成附件，也不会漏读
+// 已提交到单据的附件（Gv_File 表；没有附件时该表不存在）
 const readCommitted = () => page.eval(`(() => {
-  return [...document.querySelectorAll("tr")].map((tr) => {
-    const del = tr.querySelector("a[id*='LINK_DEL'],input[id*='LINK_DEL']");
-    if (!del) return null;
+  const t = document.querySelector("[id*='Gv_File']");
+  if (!t) return [];
+  return [...t.querySelectorAll("tr")].map((tr) => {
     const s = (tr.innerText || "").replace(/\\s+/g, " ").trim();
     if (!/\\.(pdf|ofd)/i.test(s)) return null;
     const m = s.match(/(.+?\\.(?:pdf|ofd))/i);
-    return { raw: s.slice(0, 100), name: m ? m[1] : s.slice(0, 50), del: del.id };
+    const del = tr.querySelector("a[id*='LINK_DEL']");
+    return { raw: s.slice(0, 100), name: m ? m[1] : s.slice(0, 50), del: del ? del.id : "" };
   }).filter(Boolean);
 })()`);
 
@@ -119,7 +100,7 @@ try {
   const missA = want.filter((w) => !got.some((g) => g.includes(token(w)) || w.includes(basename(g))));
   const extra = got.filter((g) => !want.some((w) => w.includes(token(g)) || g.includes(basename(w))));
   if (missA.length) console.log(`!! 解析结果里有 ${missA.length} 个附件这次没选到：${missA.join(", ")}`);
-  if (want.length && extra.length) console.log(`!! 这次选的文件里有 ${extra.length} 个不在解析结果中：${extra.join(", ")}`);
+  if (extra.length) console.log(`!! 这次选的文件里有 ${extra.length} 个不在解析结果中：${extra.join(", ")}`);
   if (!missA.length && !extra.length && want.length) console.log(`附件清单与解析结果一致（${want.length} 个）`);
 } catch { /* 没有 dataset.json 就跳过对照 */ }
 
@@ -127,7 +108,7 @@ const committed0 = await readCommitted();
 const countOf = (rows) => {
   const map = {};
   for (const r of rows) {
-    const k = attach.map((a) => token(a.name)).find((t) => normName(r.name).includes(t));
+    const k = attach.map((a) => token(a.name)).find((t) => r.name.includes(t));
     if (k) map[k] = (map[k] || 0) + 1;
   }
   return map;
@@ -152,7 +133,7 @@ if (dupes.length) {
       const rows = await readCommitted();
       const map = {};
       for (const r of rows) {
-        const k = attach.map((a) => token(a.name)).find((t) => normName(r.name).includes(t));
+        const k = attach.map((a) => token(a.name)).find((t) => r.name.includes(t));
         if (k) (map[k] = map[k] || []).push(r);
       }
       const e = Object.entries(map).find(([, arr]) => arr.length > 1);
@@ -237,24 +218,8 @@ if (queued !== plan.length) {
   process.exit(6);
 }
 
-// 点「开始上传」：这个按钮的 onclick 是 noFile()，合成 click 会把队列清空，
-// 只有**真鼠标**才真正提交上传（实测；不点则一直停在「等待上传」）。
-const upBtn = await page.eval(`(() => {
-  const e = document.getElementById("testListAction");
-  if (!e) return null;
-  e.scrollIntoView({ block: "center" });
-  const r = e.getBoundingClientRect();
-  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), w: Math.round(r.width) };
-})()`);
-if (!upBtn || !upBtn.w) {
-  console.log("!! 找不到可见的【开始上传】按钮，停止");
-  await clearQueue();
-  process.exit(7);
-}
-await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: upBtn.x, y: upBtn.y, button: "left", clickCount: 1, buttons: 1 });
-await sleep(120);
-await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: upBtn.x, y: upBtn.y, button: "left", clickCount: 1, buttons: 0 });
-console.log("已点【开始上传】");
+// 这个页面的「开始上传」实际是空函数（只检查有没有选文件），真正的上传是选完自动触发的。
+// 所以这里不点它，只等队列状态变成「上传成功」。
 const waitUploaded = async (need, timeoutMs = 30000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
@@ -289,15 +254,12 @@ if (committed1.length === 0) {
 const have1 = countOf(committed1);
 const missing = attach.filter((a) => !have1[token(a.name)]);
 const extra = Object.entries(have1).filter(([, n]) => n > 1);
-// 附件表里同时列着系统自动绑定的发票，条数核对只看「本次要传的附件」对应的行
-const mine = (rows) => rows.filter((r) => attach.some((a) => normName(r.name).includes(token(a.name))));
-const matched1 = mine(committed1);
 
-console.log(`\n== 上传后附件表 ${committed1.length} 条（只统计可删除的附件行，发票不计）==`);
-for (const r of matched1) console.log(`   · ${r.name}`);
+console.log(`\n== 上传后单据附件 ${committed1.length} 条 ==`);
+for (const r of committed1) console.log(`   · ${r.name}`);
 let ok = true;
 if (missing.length) { ok = false; console.log("\n❌ 缺少："); missing.forEach((m) => console.log("   - " + m.name)); }
 if (extra.length) { ok = false; console.log("\n❌ 重复："); extra.forEach(([k, n]) => console.log(`   - ${k} × ${n}`)); }
-if (matched1.length !== attach.length) { ok = false; console.log(`\n附件条数不符：预期 ${attach.length}，实际 ${matched1.length}`); }
+if (committed1.length !== attach.length) { ok = false; console.log(`\n条数不符：预期 ${attach.length}，实际 ${committed1.length}`); }
 console.log(ok ? "\n✅ 核对通过：附件数量正确、无重复、无多余" : "\n❌ 核对未通过，请人工处理（脚本不会提交）");
 process.exit(ok ? 0 : 5);

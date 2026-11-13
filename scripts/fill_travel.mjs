@@ -1,4 +1,4 @@
-// —— 浏览器守卫：连接断了给出明确提示，而不是半路 mysteriously 停住 ——
+﻿// —— 浏览器守卫：连接断了给出明确提示，而不是半路 mysteriously 停住 ——
 process.on("unhandledRejection", (e) => {
   const msg = String((e && e.message) || e);
   if (/Target closed|Session closed|websocket|ECONNREFUSED|WebSocket/i.test(msg)) {
@@ -48,7 +48,7 @@ const hotelInv = ds.invoices.filter((i) => i.kind === "住宿");
 // 市内交通：每天 ≤80 领 80 元/天补助（不交票）；>80 那天交票实报。注意：包干只用于住宿
 const TP = cityTransportPlan(ds, cf.people || 1);
 const carAttach = TP.ok ? car.filter((i) => TP.attach.includes(i.number)) : car;
-// 住宿：确认页填了金额才算实报，这时才把住宿票挂到住宿行
+// 住宿：确认页只填天数/城市/张数；包干时金额由系统按标准算，不包干时才写票面合计
 const hotelClaim = Number(cf.hotelAmount || 0) > 0;
 const hotelAttach = hotelClaim ? hotelInv : [];
 const trips = (ds.itineraries || []).flatMap((it) => it.trips || []).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
@@ -60,7 +60,21 @@ const PROJECT = cf.project, REASON = cf.reason, TITLE = cf.title;
 const CITY_SEQ = [...new Set(trips.map((t) => t.city))].filter(Boolean);
 // 出差地点：去掉出发城市（行程首段所在城市），保留目的地
 const CITIES = String(cf.cities || (CITY_SEQ.length > 1 ? CITY_SEQ.slice(1) : CITY_SEQ).join("/")).trim();
-const PDFS = air.concat(carAttach, hotelAttach).map((i) => i.file).map((f) => join(RAW, f));
+// 发票原件在用户给的文件夹里（invoices/raw 里只有 texts.json，找不到 PDF）
+const resolveFile = (name) => {
+  for (const c of [join(WORK, name), join(RAW, name)]) if (existsSync(c)) return c;
+  try {
+    const hit = readdirSync(WORK, { recursive: true }).map(String).find((x) => x.endsWith(name));
+    if (hit) return join(WORK, hit);
+  } catch {}
+  return join(WORK, name);
+};
+const PDFS = air.concat(carAttach, hotelAttach).map((i) => i.file).map(resolveFile);
+const MISSING = PDFS.filter((f) => !existsSync(f));
+if (MISSING.length) {
+  console.log("   ⚠ 这些发票文件找不到：");
+  for (const m of MISSING) console.log("      " + m);
+}
 
 console.log(`单据: ${air.length} 机票 ¥${AIR_TOTAL} + 网约车实报 ${carAttach.length}/${car.length} 张 ¥${CAR_TOTAL}`);
 console.log(`市内交通: ${TP.ok ? TP.days.map((d) => `${d.date.slice(5)} ¥${d.amount}${d.mode === "subsidy" ? "补助" : "实报"}`).join(" / ") : TP.why}`);
@@ -240,24 +254,16 @@ if (!user) {
   process.exit(2);
 }
 say("报销人", true, `${who.name || ""} ${user}`);
-
-// 3.4 续填：从「未提交单据」点【修改】进来时，明细页已经打开，
-//     根本没有「新建/选项目」页可填报销人 —— 硬去填会等 45 秒超时，直接跳过。
-const alreadyOnDetail = (await p.eval(inF(/clfbx_simple/i, `return !!doc.getElementById("ctl00_ContentPlaceHolder1_BT_ZSFMX");`)).catch(() => false)) === true;
-if (alreadyOnDetail) {
-  console.log("   （续填：明细页已打开，报销人沿用单据上的）");
-} else {
-  await type(/xmjbxx/i, "TB_BXR", user);
-  await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: "\r" });
-  await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
-  await sleep(1500);
-  await waitFrame(/xmjbxx/i, 'doc.readyState === "complete" && !!doc.getElementById("ctl00_ContentPlaceHolder1_TB_BXR")');
-  await sleep(1500);
-}
+await type(/xmjbxx/i, "TB_BXR", user);
+await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, text: "\r" });
+await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
+await sleep(1500);
+await waitFrame(/xmjbxx/i, 'doc.readyState === "complete" && !!doc.getElementById("ctl00_ContentPlaceHolder1_TB_BXR")');
+await sleep(1500);
 
 // 3.5 续填时，报销人一回车系统可能直接跳到明细页；那就别再做「选项目/下一步」
 // 关键：eval 失败会返回对象 {__err:"frame"}，那是 truthy，会错误跳过「选项目+下一步」
-const onDetail = alreadyOnDetail || (await p.eval(inF(/clfbx_simple/i, `return !!doc.getElementById("ctl00_ContentPlaceHolder1_BT_ZSFMX");`)).catch(() => false)) === true;
+const onDetail = (await p.eval(inF(/clfbx_simple/i, `return !!doc.getElementById("ctl00_ContentPlaceHolder1_BT_ZSFMX");`)).catch(() => false)) === true;
 if (onDetail === true) {
   say("跳过选项目", true, "已直接进入明细页（续填）");
 }
@@ -291,12 +297,9 @@ async function realClickId(id, frameRe = /clfbx_simple/i) {
     return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
   })()`)).catch(() => null);
   if (!box) return false;
-  // 主框架在顶层页面里有偏移（顶栏 60px），不加偏移会点到别的控件上
-  const X = Math.round((Number(OFF.dx) || 0) + box.x);
-  const Y = Math.round((Number(OFF.dy) || 0) + box.y);
-  await p.send("Input.dispatchMouseEvent", { type: "mousePressed", x: X, y: Y, button: "left", clickCount: 1, buttons: 1 });
+  await p.send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", clickCount: 1 });
   await sleep(120);
-  await p.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 });
+  await p.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", clickCount: 1 });
   await sleep(1200);
   return true;
 }
@@ -346,7 +349,7 @@ async function verifyAll(tag) {
     "出差人姓名": String(cf.name || who.name || "").trim(),
     "职称职别": TITLE,
     "人数": String(cf.people || 1),
-    "出差地点": "",   // 由住宿明细按住宿城市自动带出，只校验非空，不比对具体值
+    "出差地点": CITIES,
     "住宿费包干": cf.hotelMode === "invoice" ? "不包干" : "包干",
   };
   const actual = await p.eval(inF(/clfbx_simple/i, `(() => {
@@ -382,10 +385,6 @@ async function verifyAll(tag) {
     console.log(`   ${ok ? "✅" : "❌"} ${k}: 期望「${v}」/ 页面「${got}」`);
     if (!ok) bad.push(k);
   }
-  // 出差地点：系统按住宿明细自动带出，只要求非空（为空才兜底写城市）
-  const ddGot = String(actual["出差地点"] || "").trim();
-  console.log(`   ${ddGot ? "✅" : "❌"} 出差地点（系统自动）: 「${ddGot}」`);
-  if (!ddGot) bad.push("出差地点");
   // 票据张数
   const airWant = air.length, carWant = carAttach.length;
   const airCtl = (await rowCtlByLabel("飞机")) || "GV_CLF_ctl02";
@@ -516,11 +515,15 @@ for (const [k, id, v] of [
   await closePickers();
 }
 
-// 出差地点：**不填**。住宿明细保存后，系统会按住宿城市自动带出（脚本写反而会被回发清掉/覆盖）
-const dd = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_Txt_DDd"); return el?el.value:null;`)).catch(() => null);
-console.log(`   出差地点：${dd || "（等住宿明细保存后由系统自动带出）"}`);
+// 出差地点
+const dd = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_Txt_DDd");
+  if(!el) return {ok:false}; el.disabled=false; el.value=${JSON.stringify(CITIES)};
+  el.dispatchEvent(new Event("change",{bubbles:true})); return {ok:true, v:el.value};`)).catch(() => ({ ok: false }));
+say("出差地点", dd.ok, dd.v || CITIES);
 
 const HD = Number(cf.hotelDays || 0), HA = Number(cf.hotelAmount || 0);
+// 住宿费实际报销金额：包干时由系统算，拿到后再回填（用于保存前核对总额）
+let HA_EFF = HA;
 
 // 6.5 住宿费是否包干：先设一次（系统必填，默认是“不包干”）
 const setSfbg = async () => {
@@ -552,18 +555,14 @@ if (HD > 0 || HA > 0) {
     青岛:"SD", 郑州:"HA", 福州:"FJ", 厦门:"FJ", 南昌:"JX", 太原:"SX", 石家庄:"HE", 沈阳:"LN" };
   const PROV = String(cf.hotelProvince || PROV_MAP[CITY] || CITY || "").trim();
 
-  // 判据（用户确认）：住宿明细填对后，「住宿费是否包干」下拉会被系统锁定（disabled=true）。
-  // 只认「住宿费行有没有金额」会误判 —— 行里一直留着「请点击…填写」的提示文字。
   const hotelFilled = () => p.eval(inF(/clfbx_simple/i, `(() => {
-    const s = doc.getElementById("ctl00_ContentPlaceHolder1_DDL_SFBG");
-    const locked = !!(s && s.disabled);
     const tr = [...doc.querySelectorAll("tr")].find((t) => {
-    const x = (t.innerText || "").replace(/\\s+/g, "");
+    const x = (t.innerText || "").replace(/\s+/g, "");
     return x.startsWith("住宿费") || (x.includes("住宿费") && x.includes("选择票据") && !x.includes("是否包干"));
   });
-    const t = tr ? (tr.innerText || "").replace(/\\s+/g, " ") : "";
-    const hasAmt = /合计[:：]?\\s*\\d/.test(t) || /\\d+(\\.\\d+)?\\s*$/.test(t);
-    return { ok: locked || hasAmt, locked, text: t.slice(0, 70) };
+    if (!tr) return { ok: false };
+    const t = (tr.innerText || "").replace(/\s+/g, " ");
+    return { ok: !t.includes("请点击"), text: t.slice(0, 70) };
   })()`)).catch(() => null);
 
   let filledNow = await hotelFilled();
@@ -595,13 +594,13 @@ if (HD > 0 || HA > 0) {
           put0("TB_XM", ${JSON.stringify(String(TRAVELER))});
           put0("TB_RS", "1");
         }
-        // 只填出差人（工号一填，职别/姓名由系统带出）。
-        // 淡季天数/发票张数要等「出差地区」保存之后再填，住宿金额则完全由系统算 —— 这里都不碰。
         const put = (sfx, v) => { const e = row.querySelector("input[id*='" + sfx + "']"); if (!e) return false; e.value = v; return true; };
-        const a = put("TXT_YGBH", ${JSON.stringify(String(user))});
-        return { ok: a, a };
+        const a = put("TB_ZSTS_D", ${JSON.stringify(String(HD))});
+        const b = put("TB_FPZS", ${JSON.stringify(String(HI))});
+        const c = put("TB_ZSJE", ${JSON.stringify(HA.toFixed(2))});
+        return { ok: a && b && c, a, b, c };
       })()`)).catch((e) => ({ ok: false, why: e.message }));
-      say("住宿明细·填出差人", !!(r1 && r1.ok), (r1 && r1.why) || `工号 ${user}（职别由系统带出）`);
+      say("住宿明细·填数", !!(r1 && r1.ok), (r1 && r1.why) || `${HD} 天 / ${HI} 张 / ¥${HA.toFixed(2)}`);
 
       // 逐字段回读，确认填写完整（天数/张数/金额/城市）
       const openedDlg = await p.eval(inF(/clfbx_simple/i, `(() => {
@@ -647,104 +646,90 @@ if (HD > 0 || HA > 0) {
           return true;
         })()`)).catch(() => false);
         await sleep(5000);
-        // 1) 定位命中行（含目的地城市，退到「其他地区」），取复选框的 ctl 序号与坐标
-        const hitRow = await p.eval(inF(/clfbx_simple/i, `(() => {
-          const want = ${JSON.stringify(CITY)};
-          const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_DQJS_ctl\\d+_Chk_Is/.test(tr.innerHTML || ""));
-          const hit = rows.find((tr) => (tr.innerText || "").includes(want)) || rows.find((tr) => (tr.innerText || "").includes("其他地区"));
-          if (!hit) return { ok: false, why: "检索结果没有 " + want, rows: rows.length };
-          const cb = hit.querySelector("input[type=checkbox]");
-          if (!cb) return { ok: false, why: "没有复选框" };
-          const m = (cb.id || "").match(/_ctl(\\d+)_/);
-          cb.scrollIntoView({ block: "center" });
-          const r = cb.getBoundingClientRect();
-          return { ok: true, ctl: m ? m[1] : null, checked: cb.checked,
-                   x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-        })()`)).catch((e) => ({ ok: false, why: e.message }));
-
-        if (!hitRow.ok) {
-          say("住宿明细·地点", false, hitRow.why);
-        } else {
-          // 2) 勾选会触发 __doPostBack：必须真鼠标点（合成 click 不触发回发），
-          //    而且「住宿地点（城市名）」输入框是回发之后才由服务端渲染出来的 —— 必须分两步
-          const CX = Math.round((Number(OFF.dx) || 0) + hitRow.x);
-          const CY = Math.round((Number(OFF.dy) || 0) + hitRow.y);
-          await p.send("Input.dispatchMouseEvent", { type: "mousePressed", x: CX, y: CY, button: "left", clickCount: 1, buttons: 1 }).catch(() => {});
-          await sleep(120);
-          await p.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: CX, y: CY, button: "left", clickCount: 1, buttons: 0 }).catch(() => {});
-          await sleep(6000);
-
-          // 3) 回发后填写「住宿地点（城市名）」
-          const placeBox = await p.eval(inF(/clfbx_simple/i, `(() => {
-            const ctl = ${JSON.stringify(hitRow.ctl)};
-            const cb = ctl ? doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_DQJS_ctl" + ctl + "_Chk_Is") : null;
-            const inp = ctl ? doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_DQJS_ctl" + ctl + "_TB_ZSDDQR") : null;
-            if (!inp) return { ok: false, checked: cb ? cb.checked : null, why: "回发后没出现住宿地点输入框" };
-            inp.scrollIntoView({ block: "center" });
-            const r = inp.getBoundingClientRect();
-            return { ok: true, checked: cb ? cb.checked : true,
-                     x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+        // 1) 勾「含目的地城市」那一行：勾选会触发整页回发，必须勾完等一下再写城市，
+        //    否则刚写进输入框的值会被回发重绘冲掉（踩过：保存后住宿地点是空的 → “请先选择住宿地点”）
+        let cbOk = false;
+        for (let a = 0; a < 3 && !cbOk; a++) {
+          const r = await p.eval(inF(/clfbx_simple/i, `(() => {
+            const want = ${JSON.stringify(CITY)};
+            const rows = [...doc.querySelectorAll("tr")].filter((tr) => /NHZSBT_GV_DQJS_ctl\\d+_Chk_Is/.test(tr.innerHTML || ""));
+            const hit = rows.find((tr) => (tr.innerText || "").includes(want)) || rows.find((tr) => (tr.innerText || "").includes("其他地区"));
+            if (!hit) return { ok: false, why: "检索结果没有 " + want, rows: rows.length };
+            const cb = hit.querySelector("input[type=checkbox]");
+            if (cb && !cb.checked) cb.click();
+            return { ok: true, id: cb ? cb.id : null, checked: cb ? cb.checked : null };
           })()`)).catch((e) => ({ ok: false, why: e.message }));
-
-          if (!placeBox.ok) {
-            say("住宿明细·地点", false, placeBox.why);
-          } else {
-            const IX = Math.round((Number(OFF.dx) || 0) + placeBox.x);
-            const IY = Math.round((Number(OFF.dy) || 0) + placeBox.y);
-            await p.send("Input.dispatchMouseEvent", { type: "mousePressed", x: IX, y: IY, button: "left", clickCount: 1, buttons: 1 }).catch(() => {});
-            await sleep(120);
-            await p.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: IX, y: IY, button: "left", clickCount: 1, buttons: 0 }).catch(() => {});
-            await sleep(200);
-            await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 }).catch(() => {});
-            await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 }).catch(() => {});
-            await p.send("Input.insertText", { text: CITY }).catch(() => {});
-            await sleep(300);
-            const typed = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_DQJS_ctl" + ${JSON.stringify(hitRow.ctl)} + "_TB_ZSDDQR"); return el?el.value:null;`)).catch(() => null);
-            const placeOk = String(typed || "").trim() === CITY;
-            say("住宿明细·地点", placeOk && placeBox.checked !== false,
-              placeOk ? `已勾选 ${CITY} 并填入住宿地点` : `住宿地点没写进去（当前「${typed}」）`);
-            // 4) 填写成功才点「保存并返回上一页」
-            if (placeOk) {
-              await p.eval(inF(/clfbx_simple/i, `const s=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_BT_BCDQ2"); if(s) s.click(); return !!s;`)).catch(() => false);
-              await sleep(6000);
-            }
-          }
+          cbOk = !!(r && r.ok);
+          if (!cbOk) { console.log("   ! 勾选地区失败:", (r && r.why) || "?"); await sleep(2500); }
         }
+        await sleep(3500);   // 等回发把表格重绘完
+
+        // 2) 回发后重新定位「住宿地点（城市名）」输入框，再写一次城市
+        let cityVal = null;
+        for (let a = 0; a < 3; a++) {
+          const r = await p.eval(inF(/clfbx_simple/i, `(() => {
+            const want = ${JSON.stringify(CITY)};
+            const ins = [...doc.querySelectorAll("input[id*='_TB_ZSDDQR']")];
+            const inp = ins.find((i) => ((i.closest("tr") || {}).innerText || "").includes(want)) || ins[0];
+            if (!inp) return { ok: false, why: "没有住宿地点输入框" };
+            inp.value = want;
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+            inp.dispatchEvent(new Event("change", { bubbles: true }));
+            return { ok: true, v: inp.value, id: inp.id };
+          })()`)).catch((e) => ({ ok: false, why: e.message }));
+          cityVal = r;
+          if (r && r.ok && r.v === CITY) break;
+          await sleep(1500);
+        }
+
+        // 3) 保存地区，并确认对话框真的关掉了（没关就再点一次）
+        const saveRegion = async () => {
+          await p.eval(inF(/clfbx_simple/i, `const s=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_BT_BCDQ2"); if(s) s.click(); return true;`)).catch(() => false);
+          await sleep(5000);
+          return await p.eval(inF(/clfbx_simple/i, `return !doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_TB_PRO");`)).catch(() => false);
+        };
+        let dlgGone = await saveRegion();
+        if (!dlgGone) { console.log("   ! 地区对话框没关掉，再点一次保存"); dlgGone = await saveRegion(); }
+        say("住宿明细·地点", !!(cityVal && cityVal.ok) && dlgGone === true,
+          (cityVal && cityVal.why) || (dlgGone ? `已选 ${CITY}` : "地区没保存成功"));
       } else {
         say("住宿明细·地点", false, (openedDlg && openedDlg.why) || "没找到绿色 + 按钮");
         await sleep(4000);
       }
-      // 6.6.8 保存地区后系统会把工号清掉 → 补工号（真键入 + Tab 触发校验，让它带出姓名），否则报“员工编号不存在”
+      // 6.6.8 保存地区后系统会把工号清掉 → 先补工号（真键入，让它带出姓名），否则报“员工编号不存在”
       {
         let who = null;
         for (let attempt = 0; attempt < 3; attempt++) {
+          await sleep(2000);
           const ygBox = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_ZSBT_ctl02_TXT_YGBH");
             if(!el) return null; el.scrollIntoView({block:"center"});
             const r=el.getBoundingClientRect(); return {x:Math.round(r.left+r.width/2), y:Math.round(r.top+r.height/2)};`)).catch(() => null);
-          if (!ygBox) break;
-          const X = Math.round((Number(OFF.dx) || 0) + ygBox.x), Y = Math.round((Number(OFF.dy) || 0) + ygBox.y);
-          await p.send("Input.dispatchMouseEvent", { type: "mousePressed", x: X, y: Y, button: "left", clickCount: 1, buttons: 1 }).catch(() => {});
-          await p.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 }).catch(() => {});
-          await sleep(200);
-          await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 }).catch(() => {});
-          await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 }).catch(() => {});
-          await p.send("Input.insertText", { text: String(user) }).catch(() => {});
-          // Tab 失焦 → 系统按工号查人、带出姓名/职别（不 Tab 就一直空着）
-          await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 }).catch(() => {});
-          await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 }).catch(() => {});
-          await sleep(3000);
+          if (ygBox) {
+            const X = Math.round((Number(OFF.dx)||0) + ygBox.x), Y = Math.round((Number(OFF.dy)||0) + ygBox.y);
+            await p.send("Input.dispatchMouseEvent", { type:"mousePressed", x:X, y:Y, button:"left", clickCount:1, buttons:1 }).catch(()=>{});
+            await p.send("Input.dispatchMouseEvent", { type:"mouseReleased", x:X, y:Y, button:"left", clickCount:1, buttons:0 }).catch(()=>{});
+            await sleep(300);
+            await p.send("Input.dispatchKeyEvent", { type:"keyDown", key:"a", code:"KeyA", modifiers:2, windowsVirtualKeyCode:65 }).catch(()=>{});
+            await p.send("Input.dispatchKeyEvent", { type:"keyUp", key:"a", code:"KeyA", modifiers:2, windowsVirtualKeyCode:65 }).catch(()=>{});
+            await p.send("Input.insertText", { text: String(user) }).catch(()=>{});
+            await p.send("Input.dispatchKeyEvent", { type:"keyDown", key:"Tab", code:"Tab", windowsVirtualKeyCode:9 }).catch(()=>{});
+            await p.send("Input.dispatchKeyEvent", { type:"keyUp", key:"Tab", code:"Tab", windowsVirtualKeyCode:9 }).catch(()=>{});
+            await sleep(2500);
+          }
           who = await p.eval(inF(/clfbx_simple/i, `const a=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_ZSBT_ctl02_TXT_YGBH");
             const b=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_ZSBT_ctl02_TB_XM");
             return {yg:a?a.value:null, xm:b?b.value:null};`)).catch(() => null);
-          if (who && String(who.yg).trim() === String(user) && String(who.xm || "").trim()) break;
-          await sleep(1000);
+          if (who && String(who.yg).trim() === String(user) && who.xm) break;
+          console.log(`   ! 补工号没成功（第 ${attempt + 1} 次），重试…`);
         }
-        say("住宿明细·补工号", !!(who && String(who.yg).trim() === String(user) && String(who.xm || "").trim()), JSON.stringify(who || {}));
+        say("住宿明细·补工号", !!(who && String(who.yg).trim() === String(user)), JSON.stringify(who || {}));
       }
 
-      // 6.6.9 城市已保存 → 先填「淡季天数 / 发票张数」，住宿金额由系统按标准自动算出
-      //   金额绝不手填：手填会把系统算出的 500 覆盖成确认页里的值（曾写成 499.99）
-      const typeInto = async (suffix, val, label) => {
+      // 6.6.9 城市已保存 → 这一步才填「天数/张数」（顺序反了系统会把它们清成 0）
+      // 住宿金额不再从确认页来：包干由系统按「标准 × 天数」自动算，不包干才用票面合计写进去
+      const fieldsToFill = [["淡季天数", "TB_ZSTS_D", String(HD)], ["发票张数", "TB_FPZS", String(HI)]];
+      if (HA > 0) fieldsToFill.push(["住宿金额", "TB_ZSJE", HA.toFixed(2)]);
+      for (const [label, suffix, val] of fieldsToFill) {
         let ok = false, cur = null;
         for (let attempt = 0; attempt < 3 && !ok; attempt++) {
           const box = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_ZSBT_ctl02_${suffix}");
@@ -759,41 +744,24 @@ if (HD > 0 || HA > 0) {
           await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 }).catch(() => {});
           await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 }).catch(() => {});
           await p.send("Input.insertText", { text: String(val) }).catch(() => {});
-          // Tab 让输入框失焦，触发系统 onchange 里的「住宿金额 = 标准 × 天数」重算
-          await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 }).catch(() => {});
-          await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab", windowsVirtualKeyCode: 9 }).catch(() => {});
-          await sleep(1800);
+          await sleep(300);
           cur = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_ZSBT_ctl02_${suffix}"); return el?el.value:null;`)).catch(() => null);
           ok = String(cur || "").trim() === String(val);
         }
-        return { ok, cur };
-      };
+        say("住宿明细·" + label, ok, ok ? String(val) : `写入失败（当前「${cur}」）`);
+      }
 
-      const daysSet = await typeInto("TB_ZSTS_D", String(HD), "淡季天数");
-      say("住宿明细·淡季天数", daysSet.ok, daysSet.ok ? `${HD} 天` : `写入失败（当前「${daysSet.cur}」）`);
-      const invSet = await typeInto("TB_FPZS", String(HI), "发票张数");
-      say("住宿明细·发票张数", invSet.ok, invSet.ok ? `${HI} 张` : `写入失败（当前「${invSet.cur}」）`);
-
-      // 只读系统算出来的住宿金额，等它自己出现
-      const readAmt = () => p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_ZSBT_ctl02_TB_ZSJE"); return el?String(el.value):null;`)).catch(() => null);
-      let autoAmt = await readAmt();
-      for (let i = 0; i < 10 && !(autoAmt && Number(autoAmt) > 0); i++) { await sleep(1000); autoAmt = await readAmt(); }
-
-      if (cf.hotelMode === "invoice") {
-        // 不包干：金额 = 票面合计，系统不替我们算，仍需手填
+      // 包干时金额由系统算：回读「住宿金额」，能读到就当作报销金额的期望值
+      {
+        const sysAmt = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_ZSBT_ctl02_TB_ZSJE"); return el?el.value:null;`)).catch(() => null);
         if (HA > 0) {
-          const amtSet = await typeInto("TB_ZSJE", HA.toFixed(2), "住宿金额");
-          say("住宿明细·住宿金额", amtSet.ok, amtSet.ok ? `¥${HA.toFixed(2)}（不包干，按票面手填）` : `写入失败（当前「${amtSet.cur}」）`);
+          HA_EFF = HA;
+        } else if (sysAmt != null && Number(sysAmt) > 0) {
+          HA_EFF = Number(sysAmt);
+          say("住宿金额", true, `系统按标准自动算出 ¥${Number(sysAmt).toFixed(2)}（${HD} 晚）`);
         } else {
-          say("住宿明细·住宿金额", false, "不包干但确认页没给票面金额，先补上再跑");
+          say("住宿金额", false, `系统还没算出来（当前「${sysAmt || ""}」）→ 保存时若被拦，我会请你点一次保存`);
         }
-      } else {
-        const got = autoAmt && Number(autoAmt) > 0 ? Number(autoAmt) : null;
-        const want = Number(HA) > 0 ? Number(HA) : null;
-        say("住宿明细·住宿金额", !!got,
-          got
-            ? `系统自动算出 ¥${got}（未手填${want && Math.abs(got - want) > 0.005 ? `；确认页填 ¥${want}，以系统标准为准` : ""}）`
-            : "系统没算出金额（检查淡季天数 / 住宿城市 / 包干是否已生效）");
       }
 
 
@@ -813,7 +781,7 @@ if (HD > 0 || HA > 0) {
         if (!chk.xm) miss.push("姓名");
         if (String(chk.d) === "") miss.push("淡季天数");
         if (String(chk.f) === "") miss.push("发票张数");
-        if (String(chk.j) === "" || Number(chk.j) === 0) miss.push("住宿金额（系统未自动算出）");
+        if (String(chk.j) === "" || (HA > 0 && Number(chk.j) === 0)) miss.push("住宿金额");
         say("住宿明细·完整性", miss.length === 0,
             miss.length ? `缺：${miss.join("、")}（行内容：${chk.place.slice(0, 40)}）` : `工号 ${chk.zg} / ${chk.d} 天 / ${chk.f} 张 / ¥${chk.j}`);
       }
@@ -895,18 +863,7 @@ say("打开选票面板", opened, opened ? "ok" : "失败");
 let wallet = opened ? await walletCount() : -1;
 console.log("   票夹现有:", wallet);
 
-// 票夹里可能已有旧草稿释放出来的票 —— 只补传「还没有的那几张」，
-// 否则会把已有的票再传一遍（实测出现过 6 张变 8 张）
-const haveNow = new Set(await p.eval(inF(/clfbx_simple/i, `(() => [...doc.querySelectorAll("tr")]
-  .filter((tr) => tr.querySelectorAll("td").length >= 5 && /\\d{20}/.test(tr.innerHTML || ""))
-  .map((tr) => (tr.innerHTML.match(/\\b\\d{20}\\b/) || [])[0]).filter(Boolean))()`)).catch(() => []) || []);
-const needFiles = [...air, ...carAttach, ...hotelAttach]
-  .filter((i) => i.number && !haveNow.has(String(i.number)))
-  .map((i) => i.file);
-const UPLOAD = needFiles.map((f) => join(RAW, f));
-console.log(`   票夹里读到 ${haveNow.size} 张，需要补传 ${UPLOAD.length} 张`);
-
-if (UPLOAD.length > 0) {
+if (wallet >= 0 && wallet < NEED) {
   const layer = await openUploadLayer();
   console.log("   上传层:", layer ? "已打开" : "打不开");
   if (layer) {
@@ -923,25 +880,18 @@ if (UPLOAD.length > 0) {
 
     try {
       if (chooser && chooser.params && chooser.params.backendNodeId) {
-        await p.send("DOM.setFileInputFiles", { files: UPLOAD, backendNodeId: chooser.params.backendNodeId });
-        console.log("   已通过文件选择器塞入", UPLOAD.length, "个文件");
+        await p.send("DOM.setFileInputFiles", { files: PDFS, backendNodeId: chooser.params.backendNodeId });
+        console.log("   已通过文件选择器塞入", PDFS.length, "个文件");
       } else {
         const { result } = await p.send("Runtime.evaluate", { expression: `(() => { const w=${F(/clfbx_simple/i)}; return w.document.querySelector(".layui-upload-drag input[type=file]") || w.document.querySelector("input[type=file]"); })()` });
         if (result.objectId) {
-          await p.send("DOM.setFileInputFiles", { files: UPLOAD, objectId: result.objectId });
+          await p.send("DOM.setFileInputFiles", { files: PDFS, objectId: result.objectId });
           await p.eval(inF(/clfbx_simple/i, `const i=doc.querySelector("input[type=file]"); i.dispatchEvent(new Event("change",{bubbles:true})); return true;`));
         }
       }
       await sleep(2000);
-      for (let i = 0; i < 40; i++) {
-        await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("testListAction"); if(b) b.click();`)).catch(() => {});
-        await sleep(4000);
-        const st = await p.eval(inF(/clfbx_simple/i, `const it=[...doc.querySelectorAll("[id^=upload-]")];
-          return {done: it.filter(e=>/成功/.test(e.innerText||"")).length, all: it.length};`));
-        if (st.done >= UPLOAD.length) break;
-      }
-      await p.eval(inF(/clfbx_simple/i, `[...doc.querySelectorAll(".layui-layer-close")].forEach(x=>x.click()); return true;`));
-      await sleep(1500);
+      // 不要用脚本点【开始上传】：那个按钮的 onclick 是 noFile()，点了会清空队列
+      console.log("   文件已放入上传队列，等待人工点【开始上传】…");
     } catch (e) {
       say("上传", false, String(e).slice(0, 60));
     }
@@ -952,13 +902,27 @@ if (UPLOAD.length > 0) {
   wallet = await walletCount();
   console.log("   上传后票夹:", wallet);
   say("上传", wallet >= NEED, `票夹可用 ${wallet} 张`);
+  if (wallet < NEED) {
+    console.log("\n⏸  发票需要你拖一下：把 PDF 拖进虚线框（拖拽会自动上传；不要点【开始上传】，那会清空队列）。");
+    console.log("   我在这里等，最多 8 分钟，票夹满 6 张自动继续。");
+    try { await p.bringToFront(); } catch {}
+    try { await p.banner("⏸ 把 PDF 拖进虚线框，我自动继续", { color: "#f59e0b", pulse: true }); } catch {}
+    const dl = Date.now() + 8 * 60_000;
+    while (Date.now() < dl) {
+      await sleep(4000);
+      const w3 = await walletCount().catch(() => -1);
+      if (Number(w3) >= NEED) { wallet = Number(w3); break; }
+    }
+    say("上传(人工)", wallet >= NEED, `票夹可用 ${wallet} 张`);
+    if (wallet < NEED) { console.log("\n❌ 8 分钟内没传上来，已停止。"); process.exit(3); }
+  }
 }
 if (wallet < NEED) {
   // 等用户点一次【开始上传】（系统只认真人点击）；最多等 8 分钟
   console.log(`\n⏸  票夹可用 ${wallet} 张，需要 ${NEED} 张。`);
-  console.log("   6 个发票文件已放入上传队列 → 请在浏览器里点一次【开始上传】，我自动继续。");
+  console.log("   请把发票 PDF 拖进虚线框（自动上传）；不要点【开始上传】，它会清空队列。");
   try { await p.bringToFront(); } catch {}
-  try { await p.banner("⏸ 请点一次【开始上传】，我自动继续", { color: "#f59e0b", pulse: true }); } catch {}
+  try { await p.banner("⏸ 把 PDF 拖进虚线框，我自动继续", { color: "#f59e0b", pulse: true }); } catch {}
   const deadline = Date.now() + 8 * 60_000;
   let filledOk = false;
   while (Date.now() < deadline) {
@@ -1077,12 +1041,18 @@ async function pick(rowCtl, keep, label) {
 // 行号优先按行名找（不同用户/不同模块行数可能不同），找不到再退回实测号
 const airRow = (await rowCtlByLabel("飞机")) || "GV_CLF_ctl02";
 if (air.length) await pick(airRow, air.map((i) => i.number), "挂机票");
-// 汽车类（网约车/出租车/大巴…一律按「汽车」）：>80/天 的那几天把票挂到「汽车」行；
-// ≤80/天 的那几天不交票，改为在「市内交通补助」里填天数领 80 元/天
-const carRow = (await rowCtlByLabel("汽车")) || "GV_CLF_ctl04";
-console.log(`   汽车票挂到「汽车」行：${carRow}`);
-if (carAttach.length) await pick(carRow, carAttach.map((i) => i.number), "挂汽车票");
-else say("挂汽车票", true, "每天都不超 80，全部领补助，不交票");
+// 网约车挂到「市内交通补助」行（用户明确规则）；该行没有选择票据按钮时才退回「汽车」行
+const cityRow = await p.eval(inF(/clfbx_simple/i, `(() => {
+  const tr = [...doc.querySelectorAll("tr")].find((x) => /市内交通补助/.test(x.innerText || "") && x.querySelector("input[id*=BTN_XZFP]"));
+  if (!tr) return null;
+  const b = tr.querySelector("input[id*=BTN_XZFP]");
+  const m = (b.id || "").match(/(GV_CLF_ctl\\d+)/);
+  return m ? m[1] : null;
+})()`)).catch(() => null);
+const carRow = cityRow || (await rowCtlByLabel("汽车")) || "GV_CLF_ctl04";
+if (cityRow) console.log(`   网约车挂到市内交通补助行：${cityRow}`);
+if (carAttach.length) await pick(carRow, carAttach.map((i) => i.number), "挂网约车");
+else say("挂网约车", true, "每天都不超 80，全部领补助，不交票");
 
 // 9.5 住宿：把住宿票挂到住宿行（天数/金额已在「住宿明细」里按确认页填过）
 if (hotelAttach.length) {
@@ -1164,16 +1134,12 @@ if (carAttach.length && !carOk) {
   console.log("   重挂后:", JSON.stringify(snap));
 }
 
-// 9.95 出差地点由住宿明细自动带出。只有被清空时才兜底写一次，否则保持系统值
-const ddCur = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_Txt_DDd"); return el?String(el.value||"").trim():null;`)).catch(() => null);
-if (!ddCur) {
-  const dd2 = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_Txt_DDd");
-    if(!el) return {ok:false}; el.disabled=false; el.value=${JSON.stringify(CITIES)};
-    el.dispatchEvent(new Event("change",{bubbles:true})); return {ok:true, v:el.value};`)).catch(() => ({ ok: false }));
-  say("出差地点(补)", !!(dd2 && dd2.ok), (dd2 && dd2.v) || "没写进去");
-} else {
-  console.log(`   出差地点（系统带出）：${ddCur}`);
-}
+// 9.95 回发可能清空出差地点，保存前再写一次
+const dd2 = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00_ContentPlaceHolder1_Txt_DDd");
+  if(!el) return {ok:false}; el.disabled=false; el.value=${JSON.stringify(CITIES)};
+  el.dispatchEvent(new Event("change",{bubbles:true})); return {ok:true, v:el.value};`)).catch(() => ({ ok: false }));
+if (!dd2 || dd2.ok !== true) say("出差地点(补)", false, "没写进去");
+else say("出差地点(补)", true, dd2.v);
 
 await verifyAll("保存前");
   await guard("保存前");
@@ -1197,10 +1163,13 @@ if (backToList) {
     return rows.slice(0, 3);
   })()`)).catch(() => null);
   console.log("   列表里的草稿:", JSON.stringify(listed));
-  const expectTotal = Number(AIR_TOTAL || 0) + Number(CAR_TOTAL || 0) + Number(HA || 0);
+  const expectTotal = Number(AIR_TOTAL || 0) + Number(CAR_TOTAL || 0) + Number(HA_EFF || 0);
   const matched = (listed || []).find((t) => t.includes(PROJECT));
   const shown = matched ? Number(String((matched.match(/¥([\\d,\\.]+)/) || [0, "0"])[1]).replace(/,/g, "")) : 0;
-  if (matched && shown > 0 && Math.abs(shown - expectTotal) > 0.5) {
+  if (!HA_EFF && shown > 0) {
+    // 包干：住宿金额是系统按标准算的，我们没写死 → 不做等值断言，只记录出来给人核对
+    say("保存结果", true, `列表金额 ¥${shown.toFixed(2)}（机票 ¥${AIR_TOTAL} + 网约车 ¥${CAR_TOTAL} + 系统算的住宿费）`);
+  } else if (matched && shown > 0 && Math.abs(shown - expectTotal) > 0.5) {
     say("保存结果", false, `系统保存的金额是 ¥${shown}，应为 ¥${expectTotal.toFixed(2)}（说明有的票没挂上）`);
     console.log("\n❌ 保存的数据不完整，已停在这里，不再往下点。请回浏览器核对后再继续。");
     await p.bringToFront().catch(() => {});
@@ -1220,10 +1189,8 @@ if (backToList) {
 
 await guard("进支付方式前");
 
-// 11 下一步（支付方式）—— 必须真鼠标点：合成 click 不触发回发（实测，会一直停在明细页）
-if (!(await realClickId("Btn_xmzffs"))) {
-  console.log("   ! 没找到「下一步（支付方式）」按钮");
-}
+// 11 下一步（支付方式）
+await p.eval(inF(/clfbx_simple/i, `const b=document.getElementById("ctl00_ContentPlaceHolder1_Btn_xmzffs"); if(b) b.click();`));
 await sleep(10000);
 await p.screenshot(join(D, "fill_payment.png")).catch(() => {});
 // 必须回读确认真的到了支付方式页，不能盲报成功
@@ -1367,27 +1334,10 @@ if (cf.spbz) {
   } catch {}
 }
 
-// 14 附件：发票以外的文件（行程单/通知书等）→ 交给 upload_attachments.mjs 上传并核对
-//   幂等：已在单据里的跳过；只塞一批、只核对条数，多传/漏传都会报错退出；永不点确认提交
-if (process.env.YWTB_SKIP_ATTACH !== "1") {
-  console.log("\n▶ 上传附件（发票以外的文件）…");
-  try {
-    const { spawnSync } = await import("node:child_process");
-    const r = spawnSync(process.execPath, [join(import.meta.dirname, "upload_attachments.mjs"), "--dir", RAW], {
-      cwd: WORK,
-      stdio: "inherit",
-      env: { ...process.env, YWTB_WORKDIR: WORK, YWTB_PROFILE: PROFILE },
-    });
-    say("附件上传", r.status === 0, r.status === 0 ? "核对通过：无缺、无重复" : `返回 ${r.status}（看上面输出，脚本不会提交）`);
-  } catch (e) {
-    say("附件上传", false, String(e.message).slice(0, 60));
-  }
-}
-
 await p.bringToFront();
-await p.banner("🏁 已到审批单阶段 — 请核对金额/附件/担保人，最后自己点【确认提交审批】", { color: "#059669", pulse: false });
+await p.banner("🏁 已到审批单阶段 — 请在审批单页核对附件与担保人，最后自己点【确认提交审批】", { color: "#059669", pulse: false });
 process.stdout.write("\x07");
-console.log("\n下一步：审批单页核对金额、附件、担保人 → 你自己点【确认提交审批】。");
+console.log("\n下一步：审批单页 → 上传附件 → 编辑流程加担保人 → 你自己点【确认提交审批】。");
 
 console.log("\n=== 汇总 ===");
 for (const [o, k, m] of log) console.log(`${o ? "✅" : "❌"} ${k}: ${m}`);

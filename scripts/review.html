@@ -107,14 +107,13 @@
       <div id="hotelModeNote" class="hint"></div>
       <div class="row2">
         <label>住宿天数（晚）<input type="number" id="hotelDays" min="0" step="1" placeholder="如 1"></label>
-        <label>住宿金额（元）<input type="number" id="hotelAmount" min="0" step="0.01" placeholder="包干留空（系统自动算）；不包干填票面合计"></label>
-      </div>
-      <div class="row2">
         <label>住宿城市（必填）<input type="text" id="hotelCity" placeholder="如 苏州" required></label>
-    <div class="hint">包干没有住宿发票，机器无法判断你住哪个城市 —— <b>这里必须由你选/填</b>，系统按它算住宿标准。</div>
+      </div>
+      <div class="hint">住宿金额不用填：系统会按「出差地住宿标准 × 天数」自动算（包干也是这一步）。</div>
+      <div class="row2">
         <label>住宿发票张数<input type="number" id="hotelInvoices" min="0" step="1" placeholder="包干填 0"></label>
       </div>
-      <div class="hint">规则：<b>项目号 2 开头 → 必须不包干</b>（脚本锁定，不能选包干）；<b>9 开头 → 包干、不包干都可以</b>。不住就把天数、金额都填 0。城市取自出差地点。<br><b>包干时金额留空即可</b>：填单时脚本只填淡季天数，住宿金额由系统按「城市 + 天数」自动算出（苏州 1 天 = 500），填错反而会盖掉系统值。</div>
+      <div class="hint">规则：<b>项目号 2 开头 → 必须不包干</b>（脚本锁定，不能选包干）；<b>9 开头 → 包干、不包干都可以</b>。不住就把天数填 0。城市取自出差地点。</div>
     </div>
 
     <div class="card">
@@ -191,20 +190,10 @@ f.addEventListener('submit', async (e) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(df) || !/^\d{4}-\d{2}-\d{2}$/.test(dt)) { err.textContent = '出差起止日期要填成 2026-11-09 这种格式'; return; }
   if (!ct) { err.textContent = '出差地点不能为空（写「城市/城市」）'; document.getElementById('cities').focus(); return; }
   const rawDays = document.getElementById('hotelDays').value.trim();
-  const rawAmount = document.getElementById('hotelAmount').value.trim();
   const hotelDays = rawDays === '' ? 0 : Number(rawDays);
-  const hotelAmount = rawAmount === '' ? 0 : Number(rawAmount);
   const people = Number(document.getElementById('people').value || 1);
   if (!Number.isInteger(people) || people < 1) { err.textContent = '出差人数要填 ≥1 的整数'; document.getElementById('people').focus(); return; }
   if (!Number.isFinite(hotelDays) || hotelDays < 0 || !Number.isInteger(hotelDays)) { err.textContent = '住宿天数要填 0 或正整数'; document.getElementById('hotelDays').focus(); return; }
-  if (!Number.isFinite(hotelAmount) || hotelAmount < 0) { err.textContent = '住宿金额要填 0 或正数'; document.getElementById('hotelAmount').focus(); return; }
-  if (hotelAmount > 0 && hotelDays <= 0) { err.textContent = '填了住宿金额，住宿天数也要填'; document.getElementById('hotelDays').focus(); return; }
-  // 包干：住宿金额由系统按「城市 + 淡季天数」自动算出（苏州 500/天），确认页不必填；
-  // 不包干才必须给票面合计。填了也不影响包干，脚本不会拿它去覆盖系统值。
-  const forcedInvoicePre = /^2/.test((document.getElementById('project').value || '').trim());
-  const modeChosen = (f.querySelector('input[name=hotelMode]:checked') || {}).value || 'baogan';
-  const needAmount = forcedInvoicePre || modeChosen === 'invoice';
-  if (hotelDays > 0 && needAmount && hotelAmount <= 0) { err.textContent = '不包干必须填住宿金额（按票面合计）'; document.getElementById('hotelAmount').focus(); return; }
   // 包干 / 不包干：项目号 2 开头强制不包干；9 开头由用户选
   const projectVal = (document.getElementById('project').value || '').trim();
   const forcedInvoice = /^2/.test(projectVal);
@@ -221,7 +210,7 @@ f.addEventListener('submit', async (e) => {
     hotelMode,
     hotelInvoices,
     hotelDays,
-    hotelAmount,
+    hotelAmount: 0,   // 不用用户填：包干由系统按标准×天数算，不包干用住宿票面合计（服务端补）
     dateFrom: (document.getElementById('dateFrom').value || '').trim(),
     dateTo: (document.getElementById('dateTo').value || '').trim(),
     cities: (document.getElementById('cities').value || '').trim(),
