@@ -291,9 +291,12 @@ async function realClickId(id, frameRe = /clfbx_simple/i) {
     return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
   })()`)).catch(() => null);
   if (!box) return false;
-  await p.send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", clickCount: 1 });
+  // 主框架在顶层页面里有偏移（顶栏 60px），不加偏移会点到别的控件上
+  const X = Math.round((Number(OFF.dx) || 0) + box.x);
+  const Y = Math.round((Number(OFF.dy) || 0) + box.y);
+  await p.send("Input.dispatchMouseEvent", { type: "mousePressed", x: X, y: Y, button: "left", clickCount: 1, buttons: 1 });
   await sleep(120);
-  await p.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", clickCount: 1 });
+  await p.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 });
   await sleep(1200);
   return true;
 }
@@ -892,7 +895,18 @@ say("打开选票面板", opened, opened ? "ok" : "失败");
 let wallet = opened ? await walletCount() : -1;
 console.log("   票夹现有:", wallet);
 
-if (wallet >= 0 && wallet < NEED) {
+// 票夹里可能已有旧草稿释放出来的票 —— 只补传「还没有的那几张」，
+// 否则会把已有的票再传一遍（实测出现过 6 张变 8 张）
+const haveNow = new Set(await p.eval(inF(/clfbx_simple/i, `(() => [...doc.querySelectorAll("tr")]
+  .filter((tr) => tr.querySelectorAll("td").length >= 5 && /\\d{20}/.test(tr.innerHTML || ""))
+  .map((tr) => (tr.innerHTML.match(/\\b\\d{20}\\b/) || [])[0]).filter(Boolean))()`)).catch(() => []) || []);
+const needFiles = [...air, ...carAttach, ...hotelAttach]
+  .filter((i) => i.number && !haveNow.has(String(i.number)))
+  .map((i) => i.file);
+const UPLOAD = needFiles.map((f) => join(RAW, f));
+console.log(`   票夹里读到 ${haveNow.size} 张，需要补传 ${UPLOAD.length} 张`);
+
+if (UPLOAD.length > 0) {
   const layer = await openUploadLayer();
   console.log("   上传层:", layer ? "已打开" : "打不开");
   if (layer) {
@@ -909,12 +923,12 @@ if (wallet >= 0 && wallet < NEED) {
 
     try {
       if (chooser && chooser.params && chooser.params.backendNodeId) {
-        await p.send("DOM.setFileInputFiles", { files: PDFS, backendNodeId: chooser.params.backendNodeId });
-        console.log("   已通过文件选择器塞入", PDFS.length, "个文件");
+        await p.send("DOM.setFileInputFiles", { files: UPLOAD, backendNodeId: chooser.params.backendNodeId });
+        console.log("   已通过文件选择器塞入", UPLOAD.length, "个文件");
       } else {
         const { result } = await p.send("Runtime.evaluate", { expression: `(() => { const w=${F(/clfbx_simple/i)}; return w.document.querySelector(".layui-upload-drag input[type=file]") || w.document.querySelector("input[type=file]"); })()` });
         if (result.objectId) {
-          await p.send("DOM.setFileInputFiles", { files: PDFS, objectId: result.objectId });
+          await p.send("DOM.setFileInputFiles", { files: UPLOAD, objectId: result.objectId });
           await p.eval(inF(/clfbx_simple/i, `const i=doc.querySelector("input[type=file]"); i.dispatchEvent(new Event("change",{bubbles:true})); return true;`));
         }
       }
@@ -924,7 +938,7 @@ if (wallet >= 0 && wallet < NEED) {
         await sleep(4000);
         const st = await p.eval(inF(/clfbx_simple/i, `const it=[...doc.querySelectorAll("[id^=upload-]")];
           return {done: it.filter(e=>/成功/.test(e.innerText||"")).length, all: it.length};`));
-        if (st.done >= PDFS.length) break;
+        if (st.done >= UPLOAD.length) break;
       }
       await p.eval(inF(/clfbx_simple/i, `[...doc.querySelectorAll(".layui-layer-close")].forEach(x=>x.click()); return true;`));
       await sleep(1500);
@@ -1206,8 +1220,10 @@ if (backToList) {
 
 await guard("进支付方式前");
 
-// 11 下一步（支付方式）
-await p.eval(inF(/clfbx_simple/i, `const b=document.getElementById("ctl00_ContentPlaceHolder1_Btn_xmzffs"); if(b) b.click();`));
+// 11 下一步（支付方式）—— 必须真鼠标点：合成 click 不触发回发（实测，会一直停在明细页）
+if (!(await realClickId("Btn_xmzffs"))) {
+  console.log("   ! 没找到「下一步（支付方式）」按钮");
+}
 await sleep(10000);
 await p.screenshot(join(D, "fill_payment.png")).catch(() => {});
 // 必须回读确认真的到了支付方式页，不能盲报成功

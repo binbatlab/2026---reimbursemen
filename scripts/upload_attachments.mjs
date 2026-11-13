@@ -47,11 +47,13 @@ function collect() {
 }
 
 function token(name) {
-  const s = name.replace(/\.(pdf|ofd)$/i, "").replace(/\d+/g, "").replace(/[\s\-_（）()]/g, "");
-  const cn = s.match(/[\u4e00-\u9fa5]+/);
-  if (cn && cn[0].length >= 2) return cn[0].slice(0, 4);
-  return s.slice(0, 12);
+  const s = name.replace(/\.(pdf|ofd)$/i, "").replace(/[\s\-_]/g, "").replace(/（/g, "(").replace(/）/g, ")");
+  // 系统会在文件名尾部追加随机数字（>=5 位），去掉它才能和本地文件名对上；
+  // 括号里的序号 (1)(2) 必须保留，否则 4 份行程单会被当成同一份
+  const t = s.replace(/\d{5,}$/g, "");
+  return t || s.slice(0, 12);
 }
+const normName = (s) => String(s || "").replace(/\s+/g, "").replace(/（/g, "(").replace(/）/g, ")");
 
 const ver = await ensureBrowser({ profileDir: process.env.YWTB_PROFILE });
 const browser = await new Browser(ver.webSocketDebuggerUrl).connect();
@@ -125,7 +127,7 @@ const committed0 = await readCommitted();
 const countOf = (rows) => {
   const map = {};
   for (const r of rows) {
-    const k = attach.map((a) => token(a.name)).find((t) => r.name.includes(t));
+    const k = attach.map((a) => token(a.name)).find((t) => normName(r.name).includes(t));
     if (k) map[k] = (map[k] || 0) + 1;
   }
   return map;
@@ -150,7 +152,7 @@ if (dupes.length) {
       const rows = await readCommitted();
       const map = {};
       for (const r of rows) {
-        const k = attach.map((a) => token(a.name)).find((t) => r.name.includes(t));
+        const k = attach.map((a) => token(a.name)).find((t) => normName(r.name).includes(t));
         if (k) (map[k] = map[k] || []).push(r);
       }
       const e = Object.entries(map).find(([, arr]) => arr.length > 1);
@@ -235,8 +237,24 @@ if (queued !== plan.length) {
   process.exit(6);
 }
 
-// 这个页面的「开始上传」实际是空函数（只检查有没有选文件），真正的上传是选完自动触发的。
-// 所以这里不点它，只等队列状态变成「上传成功」。
+// 点「开始上传」：这个按钮的 onclick 是 noFile()，合成 click 会把队列清空，
+// 只有**真鼠标**才真正提交上传（实测；不点则一直停在「等待上传」）。
+const upBtn = await page.eval(`(() => {
+  const e = document.getElementById("testListAction");
+  if (!e) return null;
+  e.scrollIntoView({ block: "center" });
+  const r = e.getBoundingClientRect();
+  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), w: Math.round(r.width) };
+})()`);
+if (!upBtn || !upBtn.w) {
+  console.log("!! 找不到可见的【开始上传】按钮，停止");
+  await clearQueue();
+  process.exit(7);
+}
+await page.send("Input.dispatchMouseEvent", { type: "mousePressed", x: upBtn.x, y: upBtn.y, button: "left", clickCount: 1, buttons: 1 });
+await sleep(120);
+await page.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: upBtn.x, y: upBtn.y, button: "left", clickCount: 1, buttons: 0 });
+console.log("已点【开始上传】");
 const waitUploaded = async (need, timeoutMs = 30000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
@@ -272,7 +290,7 @@ const have1 = countOf(committed1);
 const missing = attach.filter((a) => !have1[token(a.name)]);
 const extra = Object.entries(have1).filter(([, n]) => n > 1);
 // 附件表里同时列着系统自动绑定的发票，条数核对只看「本次要传的附件」对应的行
-const mine = (rows) => rows.filter((r) => attach.some((a) => r.name.includes(token(a.name))));
+const mine = (rows) => rows.filter((r) => attach.some((a) => normName(r.name).includes(token(a.name))));
 const matched1 = mine(committed1);
 
 console.log(`\n== 上传后附件表 ${committed1.length} 条（只统计可删除的附件行，发票不计）==`);
