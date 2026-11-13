@@ -1,0 +1,12 @@
+﻿import { ensureBrowser, Browser } from "./cdp.mjs";
+import { ensurePortal } from "./portal.mjs";
+const ver = await ensureBrowser({ profileDir: process.env.YWTB_PROFILE });
+const browser = await new Browser(ver.webSocketDebuggerUrl).connect();
+let page = (await browser.attachExisting(() => true)) || (await browser.newPage("about:blank"));
+await page.send("Page.enable").catch(()=>{});
+const pg = await ensurePortal(page, { waitMinutes: 3, log: (m) => console.log(m) });
+if (pg && pg.eval) page = pg;
+const tabs = await browser.listPages().catch(() => []);
+console.log("最终标签数:", tabs.length);
+tabs.forEach(t => console.log("   ", (t.url||"").slice(0,70)));
+process.exit(0);

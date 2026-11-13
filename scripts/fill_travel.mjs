@@ -173,7 +173,8 @@ async function type(re, id, text) {
 
 // 1 登录/进系统：统一走 portal.mjs（先 CAS，再进报账；没会话就自动填/等人登录）
 try {
-  await ensurePortal(p, { waitMinutes: Number(process.env.YWTB_LOGIN_WAIT_MINUTES || 5), log: (m) => console.log(m) });
+  const portalPage = await ensurePortal(p, { waitMinutes: Number(process.env.YWTB_LOGIN_WAIT_MINUTES || 5), log: (m) => console.log(m) });
+  if (portalPage) p = portalPage;      // 门户里点【财务】会开新标签，后续操作要用那个标签
   say("进系统", true, "会话就绪");
 } catch (e) {
   say("进系统", false, e.message);
@@ -502,7 +503,7 @@ const TRAVELER = String(cf.name || who.name || "").trim();
 for (const [k, id, v] of [
   ["事由", "TXT_ccddjrw", REASON],
   ["姓名", "TXT_XM", TRAVELER],
-  ["职称", "TXT_JFLY", TITLE],
+
   ["人数", "TXT_RS", String(cf.people || 1)],
 ]) {
   if (!v) { say(k, true, "（空，跳过）"); continue; }
@@ -521,7 +522,14 @@ const dd = await p.eval(inF(/clfbx_simple/i, `const el=doc.getElementById("ctl00
   el.dispatchEvent(new Event("change",{bubbles:true})); return {ok:true, v:el.value};`)).catch(() => ({ ok: false }));
 say("出差地点", dd.ok, dd.v || CITIES);
 
-const HD = Number(cf.hotelDays || 0), HA = Number(cf.hotelAmount || 0);
+// 窗口已不填住宿天数/金额：天数按日期差推；金额按「住宿标准 × 天数」在页面里读标准算
+const nights = (() => {
+  const a = new Date(cf.dateFrom || ""), b = new Date(cf.dateTo || "");
+  const n = Math.round((b - a) / 86400000);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+})();
+const HD = Number(cf.hotelDays || nights || 0);
+let HA = Number(cf.hotelAmount || 0);   // 0 = 没给，稍后用页面上的标准 × 天数算
 // 住宿费实际报销金额：包干时由系统算，拿到后再回填（用于保存前核对总额）
 let HA_EFF = HA;
 
@@ -890,8 +898,21 @@ if (wallet >= 0 && wallet < NEED) {
         }
       }
       await sleep(2000);
-      // 不要用脚本点【开始上传】：那个按钮的 onclick 是 noFile()，点了会清空队列
-      console.log("   文件已放入上传队列，等待人工点【开始上传】…");
+      // 关键：按钮原始 onclick = "noFile()"（会清空队列）。去掉它再点，layui 才真正上传
+      console.log("   文件已放入队列，开始上传（先摘掉按钮的 noFile）…");
+      for (let round = 0; round < 6; round++) {
+        const done = await p.eval(inF(/clfbx_simple/i, `(() => {
+          const btn = doc.getElementById("testListAction") || doc.querySelector("button.layui-btn");
+          if (!btn) return "no-btn";
+          if (btn.getAttribute("onclick")) btn.removeAttribute("onclick");
+          btn.click();
+          const it = [...doc.querySelectorAll("[id^=upload-]")];
+          const okN = it.filter((e) => /上传成功|（成功）/.test(e.innerText || "")).length;
+          return { okN, all: it.length };
+        })()`)).catch(() => null);
+        if (done && done.okN >= PDFS.length) { console.log(`   上传完成 ${done.okN}/${PDFS.length}`); break; }
+        await sleep(6000);
+      }
     } catch (e) {
       say("上传", false, String(e).slice(0, 60));
     }

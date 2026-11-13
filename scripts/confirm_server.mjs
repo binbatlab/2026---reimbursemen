@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { ensureBrowser, Browser } from "./cdp.mjs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { readConfig, saveConfig } from "./config.mjs";
@@ -76,8 +77,12 @@ function lastValues() {
       const dest = uniq.length > 1 ? uniq.slice(1) : uniq;
       return dest.join("/");
     })(),
-    // 住宿城市：包干没有发票，机器推不出用户到底住哪 —— 只沿用上次填过的值，首次留空让用户自己选
-    hotelCity: (last && last.hotelCity) || "",
+    // 住宿城市：从行程/发票推（出差地点最后一个城市），不再问用户
+    hotelCity: (last && last.hotelCity) || (() => {
+      const all = (ds && (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.city)).filter(Boolean)) || [];
+      const uniq = [...new Set(all)];
+      return (uniq.length > 1 ? uniq.slice(1) : uniq).slice(-1)[0] || "";
+    })(),
     hotelInvoices: (last && Number(last.hotelInvoices)) || (hotel.count > 0 ? 1 : 0),
     name: (last && last.name) || "",
     spbz: (last && last.spbz) || "",
@@ -87,6 +92,22 @@ function lastValues() {
     remark: (last && last.remark) || draft.remark || "",
     payMethod: (last && last.payMethod) || d.payMethod || "private_self",
     approvers: aps,
+    invoiceRows: (() => {
+      if (!ds) return [];
+      const g = {};
+      for (const i of (ds.invoices || [])) {
+        const k = i.kind || "其他";
+        if (!g[k]) g[k] = { kind: k, n: 0, total: 0, desc: [] };
+        g[k].n += 1;
+        g[k].total += Number(i.total || 0);
+        const d = [i.travel_date || "", i.from && i.to ? `${i.from}→${i.to}` : "", i.number ? String(i.number).slice(-6) : ""]
+          .filter(Boolean).join(" ");
+        if (d) g[k].desc.push(d);
+      }
+      return Object.values(g);
+    })(),
+    invoiceTotal: (ds && (ds.invoices || []).reduce((t, i) => t + Number(i.total || 0), 0)) || 0,
+    invoiceCount: (ds && (ds.invoices || []).length) || 0,
     hadLast: !!last,
   };
 }
@@ -115,8 +136,8 @@ const FILL_JS = `
     if (d.project) sel.value = d.project;
     pin.parentNode.replaceChild(sel, pin);
   }
-  setVal('hotelDays', d.hotelDays); setVal('people', d.people);
-  setVal('hotelCity', d.hotelCity); setVal('hotelInvoices', d.hotelInvoices);
+  // hotelDays/people 已不在窗口里（由日期/工号推导）
+  // hotelCity/hotelInvoices 已不在窗口里（由出差地点推导）
   setVal('spbz', d.spbz);
   setVal('dateFrom', d.dateFrom); setVal('dateTo', d.dateTo); setVal('cities', d.cities);
   // 住宿模式：2 开头强制不包干；9 开头用户可选
@@ -317,9 +338,34 @@ function tryListen(port, attempt = 0) {
   if (v.hadLast) console.log("（已带出上次填写的内容，可直接确认或修改）");
   if (v.approvers.length) console.log(`（记住的审批人：${v.approvers.map((a) => a.no).join(", ")}）`);
   if (!process.argv.includes("--no-open")) {
-    try { execFile("rundll32", ["url.dll,FileProtocolHandler", url], { windowsHide: true }); } catch {}
-    console.log("已自动打开浏览器；保存后本窗口结束。");
+    openOrFocus(url).then((how) => {
+      if (how === "reused") console.log("已在现有标签里打开（没有新开窗口）");
+      else if (how === "opened") console.log("已自动打开浏览器；保存后本窗口结束。");
+      else console.log("没找到浏览器，请手动打开：" + url);
+    });
   }
   });
 }
+
+// 打开确认页：优先复用已在的 8787 标签（避免越开越多），没有才新开一个
+async function openOrFocus(url) {
+  try {
+    const ver = await ensureBrowser({ profileDir: process.env.YWTB_PROFILE });
+    const browser = await new Browser(ver.webSocketDebuggerUrl).connect();
+    const pages = await browser.listPages();
+    const same = pages.find((t) => (t.url || "").startsWith(url));
+    if (same) {
+      const p = await browser.attachExisting((t) => t.id === same.id);
+      if (p) { await p.goto(url, { settleMs: 1500 }).catch(() => {}); await p.bringToFront().catch(() => {}); return "reused"; }
+    }
+    const any = pages.find((t) => !/devtools/i.test(t.url || ""));
+    if (any) {
+      const p = await browser.attachExisting((t) => t.id === any.id);
+      if (p) { await p.goto(url, { settleMs: 1500 }).catch(() => {}); await p.bringToFront().catch(() => {}); return "reused"; }
+    }
+  } catch {}
+  try { execFile("rundll32", ["url.dll,FileProtocolHandler", url], { windowsHide: true }); return "opened"; } catch {}
+  return "none";
+}
+
 tryListen(BASE_PORT);

@@ -40,63 +40,111 @@ export async function ensurePortal(page, { waitMinutes = 5, log = console.log } 
     msg: ([...document.querySelectorAll("#msg,.login-error,[class*=error]")].map((e) => (e.innerText || "").trim()).filter(Boolean)[0]) || "",
   }))()`).catch(() => ({ url: "", onCas: false, hasUser: false }));
 
-  log("· 打开统一身份认证…");
-  await page.goto(ENTRY, { settleMs: 4000, timeoutMs: 30000 });
+  // ===== 用户指定的正确顺序 =====
+  // 1) Chrome 打开一网通办
+  // 2) 点页面下方的【财务】→ 会开新标签到「统一身份认证」登录页
+  // 3) 填工号+密码登录 → 进入财务办公平台 Newindex.aspx
+  // 4) 在财务平台点【网上报账】→ 进报账系统
+  log("· 1) 打开一网通办…");
+  await page.goto("https://ywtb.xidian.edu.cn/yk/index.html#/", { settleMs: 7000, timeoutMs: 40000 }).catch(() => {});
+  await page.bringToFront().catch(() => {});
 
-  let st = await state();
-  if (st.onCas && st.hasUser) {
+  // 关掉无关的多余标签（保留当前这个）
+  const selfId = page.targetId;
+  for (const t of (await page.browser.listPages().catch(() => []))) {
+    if (!t.id || t.id === selfId) continue;
+    if (/ywtb\.xidian|ids\.xidian|tysfrz\/|wsyy\/(frame_container|frame_main)/.test(t.url || "")) {
+      await page.browser.closeTarget(t.id).catch(() => {});
+    }
+  }
+
+  log("· 2) 点【财务】…");
+  const clickFin = () => page.eval(`(() => {
+    const walk=(w)=>{ try{ for (const a of w.document.querySelectorAll("a,div")) {
+        if ((a.innerText||"").trim()==="财务" && a.getBoundingClientRect().width>40) { a.click(); return true; } } }catch(e){}
+      for(let i=0;i<w.frames.length;i++){ if(walk(w.frames[i])) return true; } return false; };
+    return walk(window);
+  })()`).catch(() => false);
+
+  let finClicked = false;
+  for (let i = 0; i < 8 && !finClicked; i++) {
+    finClicked = await clickFin();
+    if (!finClicked) await sleep(2500);
+  }
+  if (!finClicked) throw new Error("一网通办里没找到【财务】卡片");
+  await sleep(8000);
+
+  // 3) 新标签 = 统一身份认证；若已登录会直接跳到 Newindex
+  let finPage = await page.browser.attachExisting((t) => /ids\.xidian|tysfrz\//i.test(t.url || ""));
+  if (!finPage) finPage = page;
+  await finPage.send("Page.enable").catch(() => {});
+
+  const casState = () => finPage.eval(`(() => ({
+    url: location.href,
+    onCas: /ids\.xidian\.edu\.cn\/authserver/.test(location.href),
+    hasUser: !!document.querySelector("#username"),
+    hasCaptcha: !!document.querySelector("#captcha"),
+  }))()`).catch(() => ({ url: "", onCas: false }));
+
+  let cs = await casState();
+  if (cs.onCas && cs.hasUser) {
     const cred = revealCred();
-    if (cred) {
-      log("· 用已保存的账号自动登录…");
+    if (cred && !cs.hasCaptcha) {
+      log("· 3) 用已保存账号自动登录…");
       const fill = async (sel, text) => {
-        const ok = await page.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)});
-          if(!e) return false; e.focus(); e.value=${JSON.stringify("")}; return true; })()`);
+        const ok = await finPage.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)}); if(!e) return false; e.focus(); e.value=""; return true; })()`);
         if (!ok) return false;
-        await page.send("Input.insertText", { text });
+        await finPage.send("Input.insertText", { text });
         return true;
       };
       await fill("#username", cred.user);
       await fill("#password", cred.pass);
-      const hasCap = (await state()).hasCaptcha;
-      if (hasCap) {
-        log("!! 出现了验证码：请在弹出的窗口里手动输入验证码并登录");
-      } else {
-        await page.eval(`(() => { const b=document.querySelector("#login_submit"); if(b) b.click(); return !!b; })()`);
-      }
+      await finPage.eval(`(() => { const b=document.querySelector("#login_submit"); if(b) b.click(); return !!b; })()`).catch(() => false);
     } else {
-      log("!! 需要登录：请在弹出的 Chrome 窗口里输入工号+密码（勾 7 天免登录）");
+      log("· 3) 请在浏览器里输入工号+密码登录（勾「7天免登录」最好）…");
+      await finPage.bringToFront().catch(() => {});
     }
+    const dl = Date.now() + waitMinutes * 60_000;
+    while (Date.now() < dl) {
+      await sleep(2500);
+      cs = await casState();
+      if (!cs.onCas) break;
+    }
+    if (cs.onCas) throw new Error("登录未完成（超时）。请先在浏览器里登录一次再重跑。");
+  }
+  log("· 3) 已登录财务平台");
 
-    // 等登录完成（自动或人工）
-    const deadline = Date.now() + waitMinutes * 60_000;
-    while (Date.now() < deadline) {
-      await sleep(2000);
-      st = await state();
-      if (!st.onCas) break;
-      if (st.msg) log("   系统提示:", st.msg);
-    }
-    if (st.onCas) throw new Error("登录未完成（超时）。请先在浏览器里登录一次再重跑。");
+  // 4) 财务平台点【网上报账】
+  await sleep(2000);
+  log("· 4) 点【网上报账】…");
+  const clickWsyy = () => finPage.eval(`(() => {
+    const cands=[...document.querySelectorAll("a,div,span,button,input")];
+    const a = cands.find((x)=>(x.innerText||"").replace(/\\s+/g,"")==="网上报账")
+      || cands.find((x)=>(x.innerText||"").includes("网上报账"))
+      || cands.find((x)=>(x.getAttribute && (x.getAttribute("href")||"")==="jump.aspx?sysid=wsyy"));
+    if (!a) return false;
+    a.click(); return true;
+  })()`).catch(() => false);
+
+  let wsClicked = false;
+  for (let i = 0; i < 10 && !wsClicked; i++) {
+    wsClicked = await clickWsyy();
+    if (!wsClicked) await sleep(2500);
+  }
+  if (!wsClicked) throw new Error("财务平台里没找到【网上报账】按钮");
+  await sleep(9000);
+
+  const wsPage = await page.browser.attachExisting((t) => /wsyy\/(frame_container|frame_main)/i.test(t.url || ""));
+  if (wsPage) {
+    page = wsPage;
+    await page.send("Page.enable").catch(() => {});
+    await page.bringToFront().catch(() => {});
+  }
+  // 关掉中间的登录页/财务平台页，只留报账平台
+  for (const t of (await page.browser.listPages().catch(() => []))) {
+    if (/ids\.xidian|tysfrz\/|ywtb\.xidian/.test(t.url || "")) await page.browser.closeTarget(t.id).catch(() => {});
   }
 
-  // 进报账系统
-  log("· 进入网上报账系统…");
-  await page.goto("https://cwcwssfv.xidian.edu.cn/tysfrz/jump.aspx?sysid=wsyy", { settleMs: 6000, timeoutMs: 30000 });
-  await sleep(1500);
-  const ok = await page.eval(`(() => ({
-    url: location.href,
-    lost: /登录信息丢失/.test(document.body.innerText || ""),
-    frames: Object.keys(window.frames).length,
-  }))()`).catch(() => ({ lost: false, frames: 0 }));
-
-  if (ok.lost || !/frame_container/i.test(ok.url)) {
-    // 兜底：再走一次 CAS 入口（有些情况下 caslogin 才是真正建会话的一步）
-    await page.goto(ENTRY, { settleMs: 4000, timeoutMs: 30000 });
-    await page.goto("https://cwcwssfv.xidian.edu.cn/tysfrz/jump.aspx?sysid=wsyy", { settleMs: 6000, timeoutMs: 30000 });
-    const st2 = await page.eval(`(() => ({ url: location.href }))()`).catch(() => ({ url: "" }));
-    if (!/frame_container/i.test(st2.url)) {
-      throw new Error("进不了报账系统（jump 仍被拒）。请在浏览器里手动从门户进一次报账系统，再重跑。");
-    }
-  }
   log("✅ 会话就绪（frame_container）");
-  return true;
+  return page;   // 返回实际使用的标签页（门户里点【财务】可能换了标签）
 }

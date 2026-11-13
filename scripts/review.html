@@ -47,12 +47,10 @@
 
   <form id="f">
     <div class="card">
-      <h2>我已从 6 张发票中读出的数据</h2>
+      <h2 id="invTitle">发票识别结果</h2>
       <table>
-        <tr><th>类型</th><th>金额</th><th>说明</th></tr>
-        <tr><td>机票 ×2</td><td>¥1,000.00</td><td>01-01 示例城市A→示例城市B XX1234；01-02 示例城市B→示例城市A XX1235</td></tr>
-        <tr><td>网约车 ×4</td><td>¥400.00</td><td>机场往返接送（示例数据）</td></tr>
-        <tr><td class="total">合计</td><td class="total">¥1,400.00</td><td>票号唯一、金额勾稽全部通过</td></tr>
+        <thead><tr><th>类型</th><th>金额</th><th>说明</th></tr></thead>
+        <tbody id="invBody"><tr><td colspan="3">读取中…</td></tr></tbody>
       </table>
     </div>
 
@@ -67,77 +65,25 @@
       <textarea id="reason" rows="3" placeholder="赴××单位开展××工作（须写明对方单位）"></textarea>
       <div class="hint">系统红字要求"须明确对方单位"。这句话会进审批流，审批人看的就是它。</div>
     </div>
-
     <div class="card">
-      <h2>3. 职称职别 <span class="req">*</span></h2>
-      <input type="text" id="title" list="titles" placeholder="教授 / 副教授 / 讲师 / 研究员 / 副研究员 …" />
-      <datalist id="titles">
-        <option value="教授"></option><option value="副教授"></option><option value="讲师"></option>
-        <option value="研究员"></option><option value="副研究员"></option><option value="助理研究员"></option>
-        <option value="工程师"></option><option value="高级工程师"></option>
-      </datalist>
-      <div class="hint">系统必填项，为空会导致「下一步」被拦截（提示"请您填写职别信息"）。影响报销标准，所以由你自己填。</div>
-      <div style="margin-top:12px">
-        <label style="font-size:13px;color:var(--sub)">出差人数
-          <input type="number" id="people" min="1" step="1" value="1" style="margin-top:6px;max-width:140px">
-        </label>
-        <div class="hint">影响市内交通补助（80 × 人数 × 天数）和单据人数。</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>3.5 出差行程 <span style="font-size:12px;color:#888">（差旅专用，已按票据带出，可改）</span></h2>
-      <div class="row2">
-        <label>出发日期<input type="text" id="dateFrom" placeholder="YYYY-MM-DD"></label>
-        <label>返回日期<input type="text" id="dateTo" placeholder="YYYY-MM-DD"></label>
-      </div>
-      <div class="row2">
-        <label>出差地点<input type="text" id="cities" placeholder="城市/城市"></label>
-      </div>
-      <div class="hint">出差地点写「城市/城市」，系统据此算住宿标准与补助；日期来自票据，一般不用改。</div>
-    </div>
-
-    <div class="card">
-      <h2>4. 住宿：包干还是不包干 <span style="font-size:12px;color:#888">（差旅专用，无纸化报销可忽略）</span></h2>
+      <h2>3. 住宿：包干还是不包干 <span style="font-size:12px;color:#888">（差旅专用，无纸化报销可忽略）</span></h2>
       <div id="hotelInfo" class="hint">正在检测住宿发票…</div>
       <label class="opt"><input type="radio" name="hotelMode" value="baogan" checked>
         <span><span class="t">包干</span><br><span class="d">按出差地标准×天数报销，<b>不用交住宿发票</b></span></span></label>
       <label class="opt"><input type="radio" name="hotelMode" value="invoice">
         <span><span class="t">不包干（按发票实报）</span><br><span class="d">必须交住宿发票，按票面金额报</span></span></label>
       <div id="hotelModeNote" class="hint"></div>
-      <div class="row2">
-        <label>住宿天数（晚）<input type="number" id="hotelDays" min="0" step="1" placeholder="如 1"></label>
-        <label>住宿城市（必填）<input type="text" id="hotelCity" placeholder="如 苏州" required></label>
-      </div>
       <div class="hint">住宿金额不用填：系统会按「出差地住宿标准 × 天数」自动算（包干也是这一步）。</div>
-      <div class="row2">
-        <label>住宿发票张数<input type="number" id="hotelInvoices" min="0" step="1" placeholder="包干填 0"></label>
-      </div>
       <div class="hint">规则：<b>项目号 2 开头 → 必须不包干</b>（脚本锁定，不能选包干）；<b>9 开头 → 包干、不包干都可以</b>。不住就把天数填 0。城市取自出差地点。</div>
     </div>
-
-    <div class="card">
-      <h2>5. 市内交通补助（按天判定） <span style="font-size:12px;color:#888">（差旅专用，无纸化报销可忽略）</span></h2>
-      <div id="transportInfo" class="hint">正在计算…</div>
-      <div class="hint">规则：每天网约车 ≤ 80 元 → 该天领 <b>80 元/人/天补助，不交票</b>；超过 80 元 → 该天<b>交发票按实际金额实报</b>，不再领当天补助。不用你填，算好给你核对，有异议告诉我改。注意：<b>「包干」只用于住宿费</b>，市内交通是补助 + 实报，两回事。</div>
-    </div>
-
-    <div class="card">
-      <h2>6. 网约车票记在哪一类 <span style="font-size:12px;color:#888">（差旅专用，无纸化报销可忽略）</span></h2>
-      <label class="opt"><input type="radio" name="car" value="qiche" checked>
-        <span><span class="t">交通费 →「汽车」</span><br><span class="d">推荐：只有这一行能挂发票（"市内交通补助"行没有选票按钮）</span></span></label>
-      <label class="opt"><input type="radio" name="car" value="qita">
-        <span><span class="t">费用明细 →「其他费用」</span><br><span class="d">如果你们财务习惯把机场接送放这里</span></span></label>
-    </div>
-
-    <div class="card">
-      <h2>7. 我准备填的备注（可改）</h2>
+<div class="card">
+      <h2>4. 备注（可改）</h2>
       <textarea id="remark" rows="3">示例：目的地无民用机场，本次出差目的地为××，往返经××中转：×月×日乘 XX1234 自××至××，转乘车至××；×月×日自××乘车返××，乘 XX1235 返××。特此说明。</textarea>
       <div class="hint">这段解释"为什么落到非目的地城市"，审批人最容易卡的地方。</div>
     </div>
 
     <div class="card">
-      <h2>8. 支付方式</h2>
+      <h2>5. 支付方式</h2>
       <label class="opt"><input type="radio" name="pay" value="private_self" checked>
         <span><span class="t">对私支付 · 本人</span><br><span class="d">钱打到你自己的工资卡（自己先垫付的情况）</span></span></label>
       <label class="opt"><input type="radio" name="pay" value="corporate">
@@ -149,7 +95,7 @@
     </div>
 
     <div class="card">
-      <h2>9. 审批人 / 担保人</h2>
+      <h2>6. 审批人 / 担保人</h2>
       <div class="hint">无纸化报销的审批流程至少要有一个担保人。填工号即可，姓名留空系统会自动带出。</div>
       <div style="margin:10px 0 4px">
         <label style="font-size:13px;color:var(--sub)">审批单备注（选填，限 50 字）
@@ -182,18 +128,16 @@ f.addEventListener('submit', async (e) => {
   const reason = document.getElementById('reason').value.trim();
   if (!document.getElementById('project').value.trim()) { err.textContent = '经费项目不能为空'; document.getElementById('project').focus(); return; }
   if (!reason) { err.textContent = '出差事由不能为空'; document.getElementById('reason').focus(); return; }
-  const title = document.getElementById('title').value.trim();
-  if (!title) { err.textContent = '职称职别不能为空'; document.getElementById('title').focus(); return; }
-  const df = (document.getElementById('dateFrom').value || '').trim();
-  const dt = (document.getElementById('dateTo').value || '').trim();
-  const ct = (document.getElementById('cities').value || '').trim();
+  const title = '';   // 职称由住宿明细自动带出
+  // 职称由住宿明细自动带出，不再校验
+  const df = String((window.__PREFILL && window.__PREFILL.dateFrom) || '').trim();
+  const dt = String((window.__PREFILL && window.__PREFILL.dateTo) || '').trim();
+  const ct = String((window.__PREFILL && window.__PREFILL.cities) || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(df) || !/^\d{4}-\d{2}-\d{2}$/.test(dt)) { err.textContent = '出差起止日期要填成 2026-11-09 这种格式'; return; }
-  if (!ct) { err.textContent = '出差地点不能为空（写「城市/城市」）'; document.getElementById('cities').focus(); return; }
-  const rawDays = document.getElementById('hotelDays').value.trim();
-  const hotelDays = rawDays === '' ? 0 : Number(rawDays);
-  const people = Number(document.getElementById('people').value || 1);
-  if (!Number.isInteger(people) || people < 1) { err.textContent = '出差人数要填 ≥1 的整数'; document.getElementById('people').focus(); return; }
-  if (!Number.isFinite(hotelDays) || hotelDays < 0 || !Number.isInteger(hotelDays)) { err.textContent = '住宿天数要填 0 或正整数'; document.getElementById('hotelDays').focus(); return; }
+  if (!ct) { err.textContent = '没能从发票推出出差地点，请检查票面行程'; return; }
+  // 天数据日期推导（住几晚）
+  const hotelDays = (() => { const a=new Date(df), b=new Date(dt); const n=Math.round((b-a)/86400000); return Number.isFinite(n) && n>0 ? n : 0; })();
+  const people = 1;   // 实际人数取自住宿明细里填的工号个数（脚本回读）
   // 包干 / 不包干：项目号 2 开头强制不包干；9 开头由用户选
   const projectVal = (document.getElementById('project').value || '').trim();
   const forcedInvoice = /^2/.test(projectVal);
@@ -211,14 +155,14 @@ f.addEventListener('submit', async (e) => {
     hotelInvoices,
     hotelDays,
     hotelAmount: 0,   // 不用用户填：包干由系统按标准×天数算，不包干用住宿票面合计（服务端补）
-    dateFrom: (document.getElementById('dateFrom').value || '').trim(),
-    dateTo: (document.getElementById('dateTo').value || '').trim(),
-    cities: (document.getElementById('cities').value || '').trim(),
-    hotelCity: (document.getElementById('hotelCity').value || '').trim(),
-    hotelInvoices: Number(document.getElementById('hotelInvoices').value || 0),
+    dateFrom: df,
+    dateTo: dt,
+    cities: ct,
+    hotelCity: ct.split('/').filter(Boolean).pop() || '',   // 取目的城市
+    hotelInvoices: hotelMode === 'invoice' ? 1 : 0,
     name: '',   // 出差人姓名 = 登录本人，由脚本从页面读取，不用用户填
-    people,
-    car: f.querySelector('input[name=car]:checked').value,
+    people,   // 默认为 1，实际人数看住宿明细工号数量
+    car: 'qiche',   // 固定挂「汽车」行（市内交通补助行没有选票入口）
     remark: document.getElementById('remark').value.trim(),
     spbz: (document.getElementById('spbz').value || '').trim(),
     payMethod: f.querySelector('input[name=pay]:checked').value,
@@ -262,6 +206,25 @@ async function pollAutofill() {
     await new Promise((res) => setTimeout(res, 2000));
   }
 }
+</script>
+<script>
+// 发票明细：按实际解析结果显示
+(function renderInvoices() {
+  const body = document.getElementById('invBody');
+  const title = document.getElementById('invTitle');
+  if (!body) return;
+  let d = {};
+  try { d = JSON.parse(document.getElementById('prefill-data').textContent || '{}'); window.__PREFILL = d; } catch {}
+  const rows = d.invoiceRows || [];
+  const total = Number(d.invoiceTotal || 0);
+  const cnt = Number(d.invoiceCount || 0);
+  if (title) title.textContent = `我已从 ${cnt} 张发票中读出的数据`;
+  if (!rows.length) { body.innerHTML = '<tr><td colspan="3">没有解析到发票</td></tr>'; return; }
+  const trs = rows.map(r =>
+    `<tr><td>${r.kind} ×${r.n}</td><td>¥${Number(r.total).toFixed(2)}</td><td>${(r.desc || []).join('；')}</td></tr>`
+  ).join('');
+  body.innerHTML = trs + `<tr><td class="total">合计</td><td class="total">¥${total.toFixed(2)}</td><td>票号唯一、金额勾稽通过</td></tr>`;
+})();
 </script>
 </body>
 </html>

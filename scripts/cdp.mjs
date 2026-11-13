@@ -139,6 +139,23 @@ export class Browser {
     return page;
   }
 
+  // 关掉某个标签（避免同源标签越积越多）
+  async closeTarget(targetId) {
+    if (!targetId) return false;
+    return this.send("Target.closeTarget", { targetId }).then(() => true).catch(() => false);
+  }
+
+  // 只保留一个匹配的标签，其余同源标签全关掉
+  async keepOnly(match, host) {
+    const pages = await this.listPages().catch(() => []);
+    const keep = pages.find(match) || null;
+    for (const p of pages) {
+      if (keep && p.id === keep.id) continue;
+      if (host && (p.url || "").includes(host)) await this.closeTarget(p.id).catch(() => false);
+    }
+    return keep;
+  }
+
   async newPage(url = "about:blank") {
     const { targetId } = await this.send("Target.createTarget", { url });
     const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true });
