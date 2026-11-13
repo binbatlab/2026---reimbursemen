@@ -77,12 +77,8 @@ function lastValues() {
       const dest = uniq.length > 1 ? uniq.slice(1) : uniq;
       return dest.join("/");
     })(),
-    hotelCity: (last && last.hotelCity) || (() => {
-      if (!ds) return "";
-      const all = (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.city)).filter(Boolean);
-      const uniq = [...new Set(all)];
-      return (uniq.length > 1 ? uniq.slice(1) : uniq).slice(-1)[0] || "";
-    })(),
+    // 住宿城市：包干没有发票，机器推不出用户到底住哪 —— 只沿用上次填过的值，首次留空让用户自己选
+    hotelCity: (last && last.hotelCity) || "",
     hotelInvoices: (last && Number(last.hotelInvoices)) || (hotel.count > 0 ? 1 : 0),
     name: (last && last.name) || "",
     spbz: (last && last.spbz) || "",
