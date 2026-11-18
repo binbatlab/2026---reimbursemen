@@ -18,27 +18,31 @@ import { join, basename } from "node:path";
 const argv = process.argv.slice(2);
 const arg = (k, d = null) => { const i = argv.indexOf(`--${k}`); return i >= 0 ? argv[i + 1] : d; };
 const has = (k) => argv.includes(`--${k}`);
-const DIR = arg("dir");
+let DIR = arg("dir");
 const FILES = arg("files");
 const DRY = has("dry-run");
 const FIX_DUPES = has("fix-dupes");
 
-const INVOICE_RE = /发票|机票|火车票|行程单|网约车|滴滴|出租|客运/;
+// 发票判定：只有真正的发票才算发票；「行程单/通知书/明细」等都是需要上传的附件
+const INVOICE_RE = /发票|机票|火车票|网约车|滴滴|出租|客运|数电票/;
 // 名字里带这些词的一律按附件处理，避免"发票查验单/发票通知书"被误判成发票而漏传
 const ATTACH_HINT_RE = /通知书|受理|授权|清单|合同|协议|明细|凭证|函/;
 const isInvoice = (name) => INVOICE_RE.test(name) && !ATTACH_HINT_RE.test(name);
 
 function collect() {
   if (FILES) return FILES.split(",").map((s) => s.trim()).filter(Boolean);
-  if (!DIR) throw new Error("需要 --dir 或 --files");
-  return readdirSync(DIR).filter((f) => /\.(pdf|ofd)$/i.test(f)).map((f) => join(DIR, f));
+  if (!DIR) DIR = process.env.YWTB_WORKDIR || process.cwd();   // 默认用当前报销工作目录
+  return readdirSync(DIR).filter((f) => /\.(pdf|ofd|jpg|jpeg|png)$/i.test(f) && !/^attach_/i.test(f)).map((f) => join(DIR, f));
 }
 
 function token(name) {
-  const s = name.replace(/\.(pdf|ofd)$/i, "").replace(/\d+/g, "").replace(/[\s\-_（）()]/g, "");
-  const cn = s.match(/[\u4e00-\u9fa5]+/);
-  if (cn && cn[0].length >= 2) return cn[0].slice(0, 4);
-  return s.slice(0, 12);
+  // 去掉扩展名和系统追加的长数字（>=6 位），但保留 (1)/(2) 这类人工序号
+  let s = String(name).replace(/\.(pdf|ofd|jpg|jpeg|png)$/i, "").replace(/\d{6,}/g, "");
+  s = s.replace(/[\s\-_（）]/g, "");
+  const cn = s.match(/[\u4e00-\u9fa5]+/g);
+  const nums = s.match(/\(?\d{1,2}\)?/g);
+  const base = cn ? cn.join("").slice(0, 6) : s.slice(0, 10);
+  return nums ? base + nums.join("") : base;
 }
 
 const ver = await ensureBrowser({ profileDir: process.env.YWTB_PROFILE });
@@ -99,22 +103,40 @@ try {
   const got = attach.map((a) => a.name);
   const missA = want.filter((w) => !got.some((g) => g.includes(token(w)) || w.includes(basename(g))));
   const extra = got.filter((g) => !want.some((w) => w.includes(token(g)) || g.includes(basename(w))));
-  if (missA.length) console.log(`!! 解析结果里有 ${missA.length} 个附件这次没选到：${missA.join(", ")}`);
-  if (extra.length) console.log(`!! 这次选的文件里有 ${extra.length} 个不在解析结果中：${extra.join(", ")}`);
+  if (want.length && missA.length) console.log(`!! 解析结果里有 ${missA.length} 个附件这次没选到：${missA.join(", ")}`);
+  if (want.length && extra.length) console.log(`!! 这次选的文件里有 ${extra.length} 个不在解析结果中：${extra.join(", ")}`);
   if (!missA.length && !extra.length && want.length) console.log(`附件清单与解析结果一致（${want.length} 个）`);
 } catch { /* 没有 dataset.json 就跳过对照 */ }
 
 const committed0 = await readCommitted();
+
+// 文件名归一：去扩展名、去系统追加的长数字、去空格括号与序号前缀
+const norm = (x) => String(x)
+  .replace(/\.(pdf|ofd|jpg|jpeg|png)$/i, "")
+  .replace(/\d{6,}/g, "")
+  .replace(/[\s()（）]/g, "")
+  .replace(/^\d+/, "");
+
+// 本地附件 a 是否已存在于某一行 r
+const hit = (a, r) => {
+  const f = norm(a.name);
+  const row = norm(r.name);
+  if (!f) return false;
+  if (row === f) return true;                       // 完全一致（含 (1)/(2) 序号）
+  if (f.length < 6) return false;                   // 太短的名字不做包含匹配，避免误判
+  return row.includes(f);
+};
+
 const countOf = (rows) => {
   const map = {};
-  for (const r of rows) {
-    const k = attach.map((a) => token(a.name)).find((t) => r.name.includes(t));
-    if (k) map[k] = (map[k] || 0) + 1;
+  for (const a of attach) {
+    const k = norm(a.name);
+    map[k] = rows.filter((r) => hit(a, r)).length;
   }
   return map;
 };
 const have0 = countOf(committed0);
-const plan = attach.filter((a) => !have0[token(a.name)]);
+const plan = attach.filter((a) => !have0[norm(a.name)]);
 const dupes = Object.entries(have0).filter(([, n]) => n > 1);
 
 console.log(`== 本地 ${files.length} 个文件：发票 ${invoices.length}、附件 ${attach.length} ==`);
@@ -157,6 +179,18 @@ if (!plan.length) {
 console.log(`\n== 待上传 ${plan.length} 个 ==`);
 for (const p of plan) console.log(`   → ${p.name}`);
 if (DRY) { console.log("\n(--dry-run 未上传)"); process.exit(0); }
+
+// 关键经验：这个上传接口是「每个文件异步落库」，点页面【保存】会被整表校验拦住，
+// 所以上传后什么都不点，等它落库，然后刷新页面按行文本核对。
+async function countByText() {
+  return page.eval(`(() => {
+    const rows = [...document.querySelectorAll("tr")].filter((tr) => {
+      const n = ((tr.cells || [])[0] || {}).innerText || "";
+      return /^\\d+$/.test(n.trim()) && /(发票|行程单|\\.pdf|\\.jpg)/i.test(tr.innerText || "");
+    });
+    return rows.length;
+  })()`).catch(() => 0);
+}
 
 // 打开上传面板
 await page.eval(`(() => { if (typeof popBox_PC === "function") popBox_PC(); return 1; })()`);
@@ -234,7 +268,20 @@ const waitUploaded = async (need, timeoutMs = 30000) => {
   }
   return { ok: 0, timeout: true };
 };
-const upState = await waitUploaded(plan.length);
+// 实测：这个页面必须点【开始上传】才会真正上传（点一次常不生效，需要连点 2 次）
+let upState = { ok: 0 };
+for (let i = 0; i < 5; i++) {
+  await page.eval(`(() => {
+    const b = document.getElementById("testListAction");
+    if (!b) return 0;
+    if (b.getAttribute("onclick")) b.removeAttribute("onclick");
+    b.click();
+    return 1;
+  })()`).catch(() => 0);
+  await sleep(7000);
+  upState = await waitUploaded(plan.length, 1500);
+  if (upState && upState.ok >= plan.length) break;
+}
 if (upState.timeout || upState.err) {
   console.log(`!! 没有自动上传成功（成功 ${upState.ok}/${plan.length}）`);
   console.log("   已清空暂存队列，避免残留文件在下次一起被提交。");
@@ -243,6 +290,40 @@ if (upState.timeout || upState.err) {
   process.exit(8);
 }
 console.log(`队列已上传成功 ${upState.ok} 条`);
+
+// 实测关键一步：上传成功后必须点【调整附件显示顺序及附件类型】→【保存顺序】，
+// 附件才会真正写进单据（点页面【保存】会被"请先填写票据信息"拦住）。
+console.log("提交附件（调整附件 → 保存顺序）…");
+await page.eval(`(() => { const b=document.getElementById("ctl00_ContentPlaceHolder1_Link_Gbsc"); if(b) b.click(); return 1; })()`).catch(() => 0);
+await sleep(3500);
+await page.eval(`(() => { const b=document.getElementById("ctl00_ContentPlaceHolder1_Btn_bjsx"); if(b) { b.click(); return 1; } return 0; })()`).catch(() => 0);
+await sleep(7000);
+await page.eval(`(() => { const b=document.getElementById("ctl00_ContentPlaceHolder1_Btn_SaveSx"); if(b) { b.click(); return 1; } return 0; })()`).catch(() => 0);
+await sleep(12000);
+await page.send("Page.reload", {}).catch(() => {});
+await sleep(14000);
+
+// 去重：同名附件超过 1 份就把多余的删掉（只动附件，不动发票）
+const countAttachRows = () => page.eval(`(() => [...document.querySelectorAll("tr")].filter((tr) => {
+  const n = ((tr.cells || [])[0] || {}).innerText || "";
+  return /^\\d+$/.test(n.trim()) && /${attach.map((a) => token(a.name).replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")).join("|") || "____"}/.test(tr.innerText || "");
+}).length)()`).catch(() => -1);
+for (let i = 0; i < 20; i++) {
+  const n = await countAttachRows();
+  if (!(n > attach.length)) break;
+  const r = await page.eval(`(() => {
+    const rows=[...document.querySelectorAll("tr")].filter((tr) => {
+      const n=((tr.cells||[])[0]||{}).innerText||"";
+      return /^\\d+$/.test(n.trim()) && new RegExp((${JSON.stringify(attach.map((a) => token(a.name)).join("|") || "____")})).test(tr.innerText||"");
+    });
+    const last=rows[rows.length-1]; if(!last) return "none";
+    const del=[...last.querySelectorAll("a,input,span,div")].find((x)=>/^删除$/.test((x.innerText||x.value||"").trim()));
+    if(!del) return "no-del";
+    del.click(); return "ok";
+  })()`).catch(() => "err");
+  if (String(r) !== "ok") break;
+  await sleep(5000);
+}
 
 let committed1 = await readCommitted();
 if (committed1.length === 0) {

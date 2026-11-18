@@ -78,7 +78,13 @@ def parse_invoice(name, text):
             inv["qty"] = int(m2.group(2))
             inv["amount_ex_tax"] = money(m3) if False else money(m2.group(3))
             inv["tax_rate"] = m2.group(4) + "%"
-    elif re.search(r"交通运输服务|客运服务|网约车|出租客运", text):
+    elif re.search(r"铁路|火车票|铁路旅客运输", text):
+        # 火车票：先判铁路，避免被“运输服务”笼统归到网约车
+        inv["kind"] = "火车"
+        m = re.search(r"¥\s*([\d.]+)\s+¥\s*([\d.]+)", text)
+        if m:
+            inv["amount_ex_tax"], inv["tax"] = money(m.group(1)), money(m.group(2))
+    elif re.search(r"交通运输服务|客运服务|网约车|出租客运|出租车|滴滴|快车|专车|租车", text):
         inv["kind"] = "网约车"
         m = re.search(r"\*交通运输服务\*[^\n]*?([\d.]+)\s+1\s+([\d.]+)\s+(\d+)%\s+([\d.]+)", text)
         if m:

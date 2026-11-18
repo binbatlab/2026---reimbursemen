@@ -66,7 +66,15 @@ function lastValues() {
     title: (last && last.title) || d.title || "",
     hotel: hotelMode,
     hotelMode,
-    hotelDays,
+    hotelDays: (() => {
+      // 天数：优先用票面日期差（没有住宿票也能算出来）
+      const dates = (ds && (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.date)).filter(Boolean).sort()) || [];
+      if (dates.length >= 2) {
+        const n = Math.round((new Date(dates[dates.length - 1]) - new Date(dates[0])) / 86400000);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+      return Number(hotelDays || 0) || 0;
+    })(),
     hotelInfo: hotel,
     dateFrom: (last && last.dateFrom) || (ds && (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.date)).filter(Boolean).sort()[0]) || "",
     dateTo: (last && last.dateTo) || (ds && (ds.itineraries || []).flatMap((it) => (it.trips || []).map((t) => t.date)).filter(Boolean).sort().slice(-1)[0]) || "",
@@ -256,7 +264,7 @@ const server = createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
 
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/review")) {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store, no-cache, must-revalidate", "pragma": "no-cache" });
     res.end(render());
     return;
   }
@@ -301,7 +309,7 @@ const server = createServer((req, res) => {
           },
         });
         console.log("收到确认:", JSON.stringify(data));
-        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
         res.end(JSON.stringify({ ok: true, autofill: true }));
         // 回应写完再启动，避免阻塞
         setTimeout(() => { try { startAutofill(); } catch (e) { console.error("自动填报启动失败:", e.message); } }, 300);
@@ -314,7 +322,7 @@ const server = createServer((req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/status") {
-    res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     res.end(JSON.stringify({
       running: autofill.running,
       code: autofill.code,

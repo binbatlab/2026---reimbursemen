@@ -1,20 +1,21 @@
 ﻿// 把「我的项目」抓下来，写成 invoices/projects.json，供确认页做下拉选择。
 //   launch.ps1 -Script scripts\list_projects.mjs
 import { ensureBrowser, Browser, sleep } from "./cdp.mjs";
+import { ensurePortal } from "./portal.mjs";
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ROOT = process.env.YWTB_WORKDIR || resolve(import.meta.dirname, "..");
 const ver = await ensureBrowser({ profileDir: process.env.YWTB_PROFILE });
 const browser = await new Browser(ver.webSocketDebuggerUrl).connect();
-const page = (await browser.attachExisting((t) => /frame_container/i.test(t.url || ""))) ||
+let page = (await browser.attachExisting((t) => /frame_container/i.test(t.url || ""))) ||
              (await browser.attachExisting((t) => /xidian/.test(t.url || ""))) ||
              (await browser.newPage("about:blank"));
 await page.send("Page.enable");
 
-if (!/frame_container/i.test(await page.eval(`location.href`))) {
-  await page.goto("https://cwcwssfv.xidian.edu.cn/tysfrz/jump.aspx?sysid=wsyy", { settleMs: 7000 });
-}
+// 统一走门户入口（一网通办 → 财务 → 网上报账），不允许直接跳财务子页面
+let pg = await ensurePortal(page, { waitMinutes: 5, log: (m) => console.log(m) });
+if (pg && pg.eval) page = pg;
 await page.eval(`(() => {
   const w = window.frames["mainframe"];
   if (!w) return "no mainframe";

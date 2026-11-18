@@ -43,7 +43,7 @@
 <body>
 <div class="wrap">
   <h1>差旅报销 · 待确认信息</h1>
-  <div class="sub">2026-01-01 ~ 01-02 · 示例出发地 ⇄ 示例到达地 · 示例姓名</div>
+  <div class="sub" id="subLine">读取中…</div>
 
   <form id="f">
     <div class="card">
@@ -65,20 +65,20 @@
       <textarea id="reason" rows="3" placeholder="赴××单位开展××工作（须写明对方单位）"></textarea>
       <div class="hint">系统红字要求"须明确对方单位"。这句话会进审批流，审批人看的就是它。</div>
     </div>
-    <div class="card">
-      <h2>3. 住宿：包干还是不包干 <span style="font-size:12px;color:#888">（差旅专用，无纸化报销可忽略）</span></h2>
+
+<div class="card">
+      <h2>3. 住宿：包干还是不包干</h2>
       <div id="hotelInfo" class="hint">正在检测住宿发票…</div>
       <label class="opt"><input type="radio" name="hotelMode" value="baogan" checked>
-        <span><span class="t">包干</span><br><span class="d">按出差地标准×天数报销，<b>不用交住宿发票</b></span></span></label>
+        <span><span class="t">包干</span><br><span class="d">按出差地标准 × 天数报销，<b>不用交住宿发票</b></span></span></label>
       <label class="opt"><input type="radio" name="hotelMode" value="invoice">
         <span><span class="t">不包干（按发票实报）</span><br><span class="d">必须交住宿发票，按票面金额报</span></span></label>
       <div id="hotelModeNote" class="hint"></div>
-      <div class="hint">住宿金额不用填：系统会按「出差地住宿标准 × 天数」自动算（包干也是这一步）。</div>
-      <div class="hint">规则：<b>项目号 2 开头 → 必须不包干</b>（脚本锁定，不能选包干）；<b>9 开头 → 包干、不包干都可以</b>。不住就把天数填 0。城市取自出差地点。</div>
     </div>
-<div class="card">
+
+    <div class="card">
       <h2>4. 备注（可改）</h2>
-      <textarea id="remark" rows="3">示例：目的地无民用机场，本次出差目的地为××，往返经××中转：×月×日乘 XX1234 自××至××，转乘车至××；×月×日自××乘车返××，乘 XX1235 返××。特此说明。</textarea>
+      <textarea id="remark" rows="3"></textarea>
       <div class="hint">这段解释"为什么落到非目的地城市"，审批人最容易卡的地方。</div>
     </div>
 
@@ -125,24 +125,24 @@ const f = document.getElementById('f');
 f.addEventListener('submit', async (e) => {
   e.preventDefault();
   const err = document.getElementById('err');
+  // 已删除的输入项（日期/地点/人数/天数/城市）全部从服务端注入的 prefill-data 里读
+  const P = (() => { try { return JSON.parse(document.getElementById('prefill-data').textContent || '{}'); } catch { return {}; } })();
   const reason = document.getElementById('reason').value.trim();
   if (!document.getElementById('project').value.trim()) { err.textContent = '经费项目不能为空'; document.getElementById('project').focus(); return; }
   if (!reason) { err.textContent = '出差事由不能为空'; document.getElementById('reason').focus(); return; }
   const title = '';   // 职称由住宿明细自动带出
   // 职称由住宿明细自动带出，不再校验
-  const df = String((window.__PREFILL && window.__PREFILL.dateFrom) || '').trim();
-  const dt = String((window.__PREFILL && window.__PREFILL.dateTo) || '').trim();
-  const ct = String((window.__PREFILL && window.__PREFILL.cities) || '').trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(df) || !/^\d{4}-\d{2}-\d{2}$/.test(dt)) { err.textContent = '出差起止日期要填成 2026-11-09 这种格式'; return; }
+  const df = String(P.dateFrom || '').trim();
+  const dt = String(P.dateTo || '').trim();
+  const ct = String(P.cities || '').trim();
+  if (!df || !dt) { err.textContent = '没能从发票推出出差日期，请检查票据行程'; return; }
   if (!ct) { err.textContent = '没能从发票推出出差地点，请检查票面行程'; return; }
   // 天数据日期推导（住几晚）
   const hotelDays = (() => { const a=new Date(df), b=new Date(dt); const n=Math.round((b-a)/86400000); return Number.isFinite(n) && n>0 ? n : 0; })();
   const people = 1;   // 实际人数取自住宿明细里填的工号个数（脚本回读）
   // 包干 / 不包干：项目号 2 开头强制不包干；9 开头由用户选
   const projectVal = (document.getElementById('project').value || '').trim();
-  const forcedInvoice = /^2/.test(projectVal);
-  let hotelMode = forcedInvoice ? 'invoice'
-    : (f.querySelector('input[name=hotelMode]:checked') || {}).value || 'baogan';
+    let hotelMode = (f.querySelector('input[name=hotelMode]:checked') || {}).value || 'baogan';
   if (hotelDays <= 0) hotelMode = 'none';
   const hotel = hotelMode;
   const hotelInvoices = hotelMode === 'invoice' ? 1 : 0;
@@ -209,7 +209,7 @@ async function pollAutofill() {
 </script>
 <script>
 // 发票明细：按实际解析结果显示
-(function renderInvoices() {
+function renderInvoices() {
   const body = document.getElementById('invBody');
   const title = document.getElementById('invTitle');
   if (!body) return;
@@ -219,12 +219,17 @@ async function pollAutofill() {
   const total = Number(d.invoiceTotal || 0);
   const cnt = Number(d.invoiceCount || 0);
   if (title) title.textContent = `我已从 ${cnt} 张发票中读出的数据`;
+  const sub = document.getElementById('subLine');
+  if (sub) sub.textContent = [d.dateFrom && d.dateTo ? `${d.dateFrom} ~ ${d.dateTo}` : "", d.cities || "", d.name || ""].filter(Boolean).join(" · ") || "";
   if (!rows.length) { body.innerHTML = '<tr><td colspan="3">没有解析到发票</td></tr>'; return; }
   const trs = rows.map(r =>
     `<tr><td>${r.kind} ×${r.n}</td><td>¥${Number(r.total).toFixed(2)}</td><td>${(r.desc || []).join('；')}</td></tr>`
   ).join('');
   body.innerHTML = trs + `<tr><td class="total">合计</td><td class="total">¥${total.toFixed(2)}</td><td>票号唯一、金额勾稽通过</td></tr>`;
-})();
+}
+// 等页面全部解析完再渲染（prefill-data 可能在本脚本之后才出现）
+if (document.readyState === 'complete') renderInvoices();
+else window.addEventListener('load', renderInvoices);
 </script>
 </body>
 </html>

@@ -39,6 +39,9 @@ if (!cfg.staffNo) {
   if ((r.status ?? 1) !== 0) die("设置页没有完成，先设置工号密码再跑。");
 }
 
+// 0 开跑前先整理浏览器标签（关掉重复的报账平台/财务平台/门户页）
+runNode("tidy_tabs.mjs");
+
 // 1 解析发票（若已有 dataset.json 且比 PDF 新，就复用）
 const invDir = resolve(ROOT, "invoices");
 const dsPath = resolve(invDir, "dataset.json");
@@ -55,6 +58,13 @@ runNode("draft_confirm.mjs");
 if (!existsSync(resolve(invDir, "projects.json"))) {
   log("\n没有项目清单，尝试从系统抓取（需要已登录）");
   runNode("list_projects.mjs");
+}
+
+// 2.5 先进系统（一网通办 → 财务 → 登录 → 网上报账），再给用户看窗口
+if (!SKIP) {
+  log("\n▶ 先进入报账系统（一网通办 → 财务 → 网上报账）…");
+  const enterStatus = runNode("enter.mjs");
+  if (enterStatus !== 0) die("进不去报账系统（看上面的登录提示；需要你在浏览器里登录一次）");
 }
 
 // 3 确认页：等用户填完并点确认
@@ -90,4 +100,11 @@ if (SKIP) {
 
 // 4（仅 --skip-confirm）直接填报
 if (!existsSync(confirmPath)) die("没有 confirm.json，无法填报");
-process.exit(runNode("fill_travel.mjs"));
+const fillCode = runNode("fill_travel.mjs");
+// 附件上传已内置在 fill_travel 的「审核人之后」那一步（12.6）；
+// 这里只在 fill 明确失败、但审批单其实已生成时做一次兜底。
+if (fillCode !== 0) {
+  log("\n▶ 兜底：审批单若已生成，把非发票附件补传一次（幂等）");
+  runNode("upload_attachments.mjs", ["--fix-dupes"]);
+}
+process.exit(fillCode);
