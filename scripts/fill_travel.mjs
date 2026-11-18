@@ -537,6 +537,7 @@ const nights = (() => {
   return Number.isFinite(n) && n > 0 ? n : 0;
 })();
 const HD = Number(cf.hotelDays || nights || 0);
+let STD_HOTEL = 0;   // 住宿明细里读到的「淡季标准」，后面核对合计要用
 let HA = Number(cf.hotelAmount || 0);   // 0 = 没给，稍后用页面上的标准 × 天数算
 // 住宿费实际报销金额：包干时由系统算，拿到后再回填（用于保存前核对总额）
 let HA_EFF = HA;
@@ -761,6 +762,7 @@ if (HD > 0 || HA > 0) {
           return null;
         })()`)).catch(() => null);
         if (stdRead) std = stdRead;
+        STD_HOTEL = Number(std) > 0 ? Number(std) : 0;
         const amt = HA > 0 ? HA : (Number(std) > 0 ? Number(std) * HD : 0);
         if (amt > 0) {
           fieldsToFill.push(["住宿金额", "TB_ZSJE", amt.toFixed(2)]);
@@ -1330,6 +1332,66 @@ if (backToList) {
 
 await guard("进支付方式前");
 
+// 10.5 「进不了支付方式」的根治：保存后核对合计，住宿费没算进去就补写金额再存一次
+{
+  const readTotal = () => p.eval(inF(/clfbx_simple/i, `(() => {
+    const t = (doc.body.innerText || "").replace(/\\s+/g, " ");
+    const m = t.match(/合计[：: ]*\\s*(\\d+)?\\s*([\\d,]+\\.?\\d*)/);
+    return m ? Number(String(m[2]).replace(/,/g, "")) : 0;
+  })()`)).catch(() => 0);
+  const hotelExpect = Number(HA_EFF || 0) || (Number(STD_HOTEL || 0) * HD);
+  const expectTotal = Number(AIR_TOTAL || 0) + Number(CAR_TOTAL || 0) + hotelExpect;
+  let total = await readTotal();
+  console.log(`   合计核对：页面 ¥${total} / 应有 ¥${expectTotal}（机票 ${AIR_TOTAL} + 网约车 ${CAR_TOTAL} + 住宿 ${hotelExpect}）`);
+
+  for (let round = 0; round < 2 && expectTotal > 0 && total + 0.5 < expectTotal; round++) {
+    console.log(`   ! 合计少了 ¥${(expectTotal - total).toFixed(2)}，补写住宿金额后重存（第 ${round + 1} 次）`);
+    // 打开住宿明细 → 写金额 → 真实点击保存
+    await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_ZSFMX"); if(b) b.click(); return !!b;`)).catch(() => false);
+    await sleep(9000);
+    const box = await p.eval(inF(/clfbx_simple/i, `(() => {
+      const e = doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_GV_ZSBT_ctl02_TB_ZSJE");
+      if (!e) return null;
+      e.scrollIntoView({ block: "center" });
+      const r = e.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    })()`)).catch(() => null);
+    if (box) {
+      const X = OFF.dx + box.x, Y = OFF.dy + box.y;
+      await p.send("Input.dispatchMouseEvent", { type: "mousePressed", x: X, y: Y, button: "left", clickCount: 1, buttons: 1 }).catch(() => {});
+      await p.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 }).catch(() => {});
+      await sleep(250);
+      await p.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 }).catch(() => {});
+      await p.send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", modifiers: 2, windowsVirtualKeyCode: 65 }).catch(() => {});
+      await p.send("Input.insertText", { text: String(hotelExpect) }).catch(() => {});
+      await sleep(600);
+    }
+    const saveBtn = await p.eval(inF(/clfbx_simple/i, `(() => {
+      const b = doc.getElementById("ctl00_ContentPlaceHolder1_NHZSBT_BTN_CLOSE");
+      if (!b) return null;
+      b.scrollIntoView({ block: "center" });
+      const r = b.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    })()`)).catch(() => null);
+    if (saveBtn) {
+      const X = OFF.dx + saveBtn.x, Y = OFF.dy + saveBtn.y;
+      await p.send("Input.dispatchMouseEvent", { type: "mousePressed", x: X, y: Y, button: "left", clickCount: 1, buttons: 1 }).catch(() => {});
+      await p.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: X, y: Y, button: "left", clickCount: 1, buttons: 0 }).catch(() => {});
+    }
+    await sleep(12000);
+    await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_SAVE"); if(b) b.click(); return !!b;`)).catch(() => false);
+    await sleep(12000);
+    total = await readTotal();
+    console.log(`   → 重存后合计：¥${total}`);
+  }
+  if (expectTotal > 0 && total + 0.5 < expectTotal) {
+    say("合计核对", false, `页面 ¥${total} / 应有 ¥${expectTotal.toFixed(2)}`);
+    console.log("\n⚠️ 合计仍不足，继续下一步大概率被系统拦住；仍会尝试一次。");
+  } else if (expectTotal > 0) {
+    say("合计核对", true, `¥${total}（含住宿 ${hotelExpect}）`);
+  }
+}
+
 // 11 下一步（支付方式）
 await p.eval(inF(/clfbx_simple/i, `const b=document.getElementById("ctl00_ContentPlaceHolder1_Btn_xmzffs"); if(b) b.click();`));
 await sleep(10000);
@@ -1341,6 +1403,31 @@ const after = await p.eval(`(() => {
            text: (w ? w.document.body.innerText : (document.body.innerText || "")).replace(/\\s+/g, " ").slice(0, 200) };
 })()`).catch(() => ({ url: "", text: "" }));
 if (!/ZFFS/i.test(after.url)) {
+  // 第一次没进支付方式：回明细页重存一次再试（常见原因是住宿金额/明细没落库）
+  for (let retry = 1; retry <= 2; retry++) {
+    console.log(`\n   ! 没进支付方式（第 ${retry} 次重试）：先重存单据再点下一步`);
+    await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_BT_SAVE"); if(b) b.click(); return !!b;`)).catch(() => false);
+    await sleep(12000);
+    const again = await p.eval(`(() => {
+      const w = window.frames["mainframe"];
+      return w ? w.location.href : location.href;
+    })()`).catch(() => "");
+    if (!/clfbx_simple/i.test(again)) {
+      // 被退回列表：重新打开这张单据
+      await p.eval(inF(/clfbx_simple/i, `const a=[...doc.querySelectorAll("a")].find(x=>(x.innerText||"").trim()==="修改"); if(a) a.click(); return !!a;`)).catch(() => false);
+      await sleep(14000);
+    }
+    await p.eval(inF(/clfbx_simple/i, `const b=doc.getElementById("ctl00_ContentPlaceHolder1_Btn_xmzffs"); if(b) b.click(); return !!b;`)).catch(() => false);
+    await sleep(12000);
+    const u2 = await p.eval(`(() => { const w=window.frames["mainframe"]; return w ? w.location.href : location.href; })()`).catch(() => "");
+    if (/ZFFS/i.test(u2)) {
+      say("进支付方式", true, `重试 ${retry} 次后进入 ${u2.slice(-30)}`);
+      break;
+    }
+  }
+}
+
+if (!/ZFFS/i.test(await p.eval(`(() => { const w=window.frames["mainframe"]; return w ? w.location.href : location.href; })()`).catch(() => ""))) {
   const hint = await p.eval(`(() => {
     const w = window.frames["mainframe"];
     const t = w ? (w.document.body.innerText || "") : (document.body.innerText || "");

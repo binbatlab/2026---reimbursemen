@@ -332,15 +332,17 @@ if (committed1.length === 0) {
   await sleep(9000);
   committed1 = await readCommitted();
 }
-const have1 = countOf(committed1);
-const missing = attach.filter((a) => !have1[token(a.name)]);
+const have1 = countOf(committed1);                       // 键是 norm(name)
+const missing = attach.filter((a) => !have1[norm(a.name)]);
 const extra = Object.entries(have1).filter(([, n]) => n > 1);
+// 只统计「属于本地附件」的那些行（发票行不算）
+const attachRows = committed1.filter((r) => attach.some((a) => hit(a, r))).length;
 
 console.log(`\n== 上传后单据附件 ${committed1.length} 条 ==`);
 for (const r of committed1) console.log(`   · ${r.name}`);
 let ok = true;
 if (missing.length) { ok = false; console.log("\n❌ 缺少："); missing.forEach((m) => console.log("   - " + m.name)); }
 if (extra.length) { ok = false; console.log("\n❌ 重复："); extra.forEach(([k, n]) => console.log(`   - ${k} × ${n}`)); }
-if (committed1.length !== attach.length) { ok = false; console.log(`\n条数不符：预期 ${attach.length}，实际 ${committed1.length}`); }
+if (attachRows !== attach.length) { ok = false; console.log(`\n附件条数不符：预期 ${attach.length}，实际 ${attachRows}`); }
 console.log(ok ? "\n✅ 核对通过：附件数量正确、无重复、无多余" : "\n❌ 核对未通过，请人工处理（脚本不会提交）");
 process.exit(ok ? 0 : 5);
